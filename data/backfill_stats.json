@@ -1,0 +1,19 @@
+{
+  "started_at": "2026-04-26T13:04:53.486300",
+  "range": "2026-03-26 ~ 2026-04-25",
+  "venues": 43,
+  "ingested": 112,
+  "no_race": 0,
+  "skipped": 1221,
+  "errors": 0,
+  "total_rows": {
+    "meta": 112,
+    "entries": 8263,
+    "lines": 0,
+    "stats": 8263,
+    "results": 8263,
+    "payouts": 8396
+  },
+  "finished_at": "2026-04-26T13:53:11.891925",
+  "elapsed_sec": 2898.4
+}

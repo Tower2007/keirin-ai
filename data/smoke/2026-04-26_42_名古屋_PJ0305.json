@@ -1,0 +1,1824 @@
+{
+  "rInfo": [
+    {
+      "sInfo": [
+        {
+          "syabanColor": "base_color_1",
+          "syaban": 1,
+          "Yosoin": "注",
+          "senNo": "015507",
+          "senName": "上遠野　拓馬",
+          "huken": "宮　城",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_2",
+          "syaban": 2,
+          "Yosoin": "△",
+          "senNo": "013197",
+          "senName": "鈴木　幸紀",
+          "huken": "三　重",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_3",
+          "syaban": 3,
+          "Yosoin": "×",
+          "senNo": "013810",
+          "senName": "良永　浩一",
+          "huken": "福　岡",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_4",
+          "syaban": 4,
+          "Yosoin": "◎",
+          "senNo": "015236",
+          "senName": "藤根　俊貴",
+          "huken": "岩　手",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_5",
+          "syaban": 5,
+          "Yosoin": "○",
+          "senNo": "015536",
+          "senName": "疋田　力也",
+          "huken": "愛　知",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        }
+      ],
+      "nInfo": [
+        {
+          "syaban": 1,
+          "narabiX": 5,
+          "narabiY": 1
+        },
+        {
+          "syaban": 2,
+          "narabiX": 2,
+          "narabiY": 1
+        },
+        {
+          "syaban": 3,
+          "narabiX": 3,
+          "narabiY": 1
+        },
+        {
+          "syaban": 4,
+          "narabiX": 6,
+          "narabiY": 1
+        },
+        {
+          "syaban": 5,
+          "narabiX": 1,
+          "narabiY": 1
+        }
+      ],
+      "raceNo": 1,
+      "syumoku": "Ｓ級一般",
+      "denTime": "10:42",
+      "stTime": "10:45",
+      "digetFlag": 0,
+      "narabiFlg": 1,
+      "lineColor": "nibusen",
+      "line": "二分戦",
+      "seri": 0,
+      "narabiYCnt": 1,
+      "ozzFlg": 1,
+      "resultFlg": 0
+    },
+    {
+      "sInfo": [
+        {
+          "syabanColor": "base_color_1",
+          "syaban": 1,
+          "Yosoin": "◎",
+          "senNo": "015540",
+          "senName": "徳田　匠",
+          "huken": "京　都",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_2",
+          "syaban": 2,
+          "Yosoin": "△",
+          "senNo": "014450",
+          "senName": "金子　哲大",
+          "huken": "埼　玉",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_3",
+          "syaban": 3,
+          "Yosoin": "×",
+          "senNo": "014953",
+          "senName": "和田　誠寿",
+          "huken": "広　島",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_4",
+          "syaban": 4,
+          "Yosoin": "注",
+          "senNo": "015382",
+          "senName": "竹元　健竜",
+          "huken": "福　岡",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_5",
+          "syaban": 5,
+          "Yosoin": "○",
+          "senNo": "013330",
+          "senName": "舘　泰守",
+          "huken": "愛　知",
+          "kyaku": "追",
+          "assenColor": "body_base_color",
+          "assen": "(補充)",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        }
+      ],
+      "nInfo": [
+        {
+          "syaban": 1,
+          "narabiX": 6,
+          "narabiY": 1
+        },
+        {
+          "syaban": 2,
+          "narabiX": 9,
+          "narabiY": 1
+        },
+        {
+          "syaban": 3,
+          "narabiX": 1,
+          "narabiY": 1
+        },
+        {
+          "syaban": 4,
+          "narabiX": 3,
+          "narabiY": 1
+        },
+        {
+          "syaban": 5,
+          "narabiX": 7,
+          "narabiY": 1
+        }
+      ],
+      "raceNo": 2,
+      "syumoku": "Ｓ級一般",
+      "denTime": "11:06",
+      "stTime": "11:09",
+      "digetFlag": 0,
+      "narabiFlg": 1,
+      "lineColor": "komagire",
+      "line": "コマ切れ",
+      "seri": 0,
+      "narabiYCnt": 1,
+      "ozzFlg": 1,
+      "resultFlg": 0
+    },
+    {
+      "sInfo": [
+        {
+          "syabanColor": "base_color_1",
+          "syaban": 1,
+          "Yosoin": "△",
+          "senNo": "014080",
+          "senName": "近藤　隆司",
+          "huken": "千　葉",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_2",
+          "syaban": 2,
+          "Yosoin": "注",
+          "senNo": "012759",
+          "senName": "金山　栄治",
+          "huken": "滋　賀",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_3",
+          "syaban": 3,
+          "Yosoin": "○",
+          "senNo": "014043",
+          "senName": "中園　和剛",
+          "huken": "福　岡",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_4",
+          "syaban": 4,
+          "Yosoin": "◎",
+          "senNo": "015067",
+          "senName": "瀬戸　晋作",
+          "huken": "長　崎",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_5",
+          "syaban": 5,
+          "Yosoin": "×",
+          "senNo": "012886",
+          "senName": "中井　達郎",
+          "huken": "静　岡",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_6",
+          "syaban": 6,
+          "senNo": "015627",
+          "senName": "南儀　拓海",
+          "huken": "富　山",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "assenColor": "body_base_color",
+          "assen": "(補充)",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        }
+      ],
+      "nInfo": [
+        {
+          "syaban": 1,
+          "narabiX": 1,
+          "narabiY": 1
+        },
+        {
+          "syaban": 2,
+          "narabiX": 5,
+          "narabiY": 1
+        },
+        {
+          "syaban": 3,
+          "narabiX": 8,
+          "narabiY": 1
+        },
+        {
+          "syaban": 4,
+          "narabiX": 7,
+          "narabiY": 1
+        },
+        {
+          "syaban": 5,
+          "narabiX": 2,
+          "narabiY": 1
+        },
+        {
+          "syaban": 6,
+          "narabiX": 4,
+          "narabiY": 1
+        }
+      ],
+      "raceNo": 3,
+      "syumoku": "Ｓ級一般",
+      "denTime": "11:30",
+      "stTime": "11:33",
+      "digetFlag": 0,
+      "narabiFlg": 1,
+      "lineColor": "sanbusen",
+      "line": "三分戦",
+      "seri": 0,
+      "narabiYCnt": 1,
+      "ozzFlg": 1,
+      "resultFlg": 0
+    },
+    {
+      "sInfo": [
+        {
+          "syabanColor": "base_color_1",
+          "syaban": 1,
+          "Yosoin": "×",
+          "senNo": "014683",
+          "senName": "藤岡　隆治",
+          "huken": "徳　島",
+          "kyaku": "追",
+          "assenColor": "body_base_color",
+          "assen": "(追加)",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_2",
+          "syaban": 2,
+          "Yosoin": "○",
+          "senNo": "014939",
+          "senName": "長尾　拳太",
+          "huken": "岐　阜",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_3",
+          "syaban": 3,
+          "Yosoin": "△",
+          "senNo": "015694",
+          "senName": "浮島　知稀",
+          "huken": "群　馬",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_4",
+          "syaban": 4,
+          "Yosoin": "注",
+          "senNo": "015741",
+          "senName": "堀川　敬太郎",
+          "huken": "福　岡",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "assenColor": "body_base_color",
+          "assen": "(追加)",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_5",
+          "syaban": 5,
+          "senNo": "014135",
+          "senName": "金澤　幸司",
+          "huken": "福　島",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_6",
+          "syaban": 6,
+          "senNo": "015535",
+          "senName": "佐藤　竜太",
+          "huken": "愛　知",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_7",
+          "syaban": 7,
+          "senNo": "013407",
+          "senName": "大矢　将大",
+          "huken": "埼　玉",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_8",
+          "syaban": 8,
+          "senNo": "014796",
+          "senName": "保科　千春",
+          "huken": "宮　城",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_9",
+          "syaban": 9,
+          "Yosoin": "◎",
+          "senNo": "015282",
+          "senName": "宮本　隼輔",
+          "huken": "熊　本",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        }
+      ],
+      "nInfo": [
+        {
+          "syaban": 1,
+          "narabiX": 6,
+          "narabiY": 1
+        },
+        {
+          "syaban": 2,
+          "narabiX": 9,
+          "narabiY": 1
+        },
+        {
+          "syaban": 3,
+          "narabiX": 11,
+          "narabiY": 1
+        },
+        {
+          "syaban": 4,
+          "narabiX": 4,
+          "narabiY": 1
+        },
+        {
+          "syaban": 5,
+          "narabiX": 2,
+          "narabiY": 1
+        },
+        {
+          "syaban": 6,
+          "narabiX": 8,
+          "narabiY": 1
+        },
+        {
+          "syaban": 7,
+          "narabiX": 12,
+          "narabiY": 1
+        },
+        {
+          "syaban": 8,
+          "narabiX": 1,
+          "narabiY": 1
+        },
+        {
+          "syaban": 9,
+          "narabiX": 5,
+          "narabiY": 1
+        }
+      ],
+      "raceNo": 4,
+      "syumoku": "Ｓ級選抜",
+      "denTime": "11:54",
+      "stTime": "11:57",
+      "digetFlag": 0,
+      "narabiFlg": 1,
+      "lineColor": "yonbusen",
+      "line": "四分戦",
+      "seri": 0,
+      "narabiYCnt": 1,
+      "ozzFlg": 1,
+      "resultFlg": 0
+    },
+    {
+      "sInfo": [
+        {
+          "syabanColor": "base_color_1",
+          "syaban": 1,
+          "Yosoin": "◎",
+          "senNo": "014231",
+          "senName": "河村　雅章",
+          "huken": "東　京",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_2",
+          "syaban": 2,
+          "Yosoin": "×",
+          "senNo": "014852",
+          "senName": "徳永　哲人",
+          "huken": "熊　本",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_3",
+          "syaban": 3,
+          "Yosoin": "注",
+          "senNo": "013990",
+          "senName": "荻原　尚人",
+          "huken": "宮　城",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_4",
+          "syaban": 4,
+          "senNo": "015508",
+          "senName": "菅野　航基",
+          "huken": "宮　城",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_5",
+          "syaban": 5,
+          "Yosoin": "○",
+          "senNo": "015207",
+          "senName": "林　慶次郎",
+          "huken": "福　岡",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_6",
+          "syaban": 6,
+          "senNo": "013618",
+          "senName": "櫻井　学",
+          "huken": "群　馬",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_7",
+          "syaban": 7,
+          "senNo": "014679",
+          "senName": "小玉　拓真",
+          "huken": "岡　山",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_8",
+          "syaban": 8,
+          "senNo": "014134",
+          "senName": "小野　大介",
+          "huken": "福　島",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_9",
+          "syaban": 9,
+          "Yosoin": "△",
+          "senNo": "014863",
+          "senName": "一戸　康宏",
+          "huken": "埼　玉",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        }
+      ],
+      "nInfo": [
+        {
+          "syaban": 1,
+          "narabiX": 2,
+          "narabiY": 1
+        },
+        {
+          "syaban": 2,
+          "narabiX": 10,
+          "narabiY": 1
+        },
+        {
+          "syaban": 3,
+          "narabiX": 6,
+          "narabiY": 1
+        },
+        {
+          "syaban": 4,
+          "narabiX": 5,
+          "narabiY": 1
+        },
+        {
+          "syaban": 5,
+          "narabiX": 9,
+          "narabiY": 1
+        },
+        {
+          "syaban": 6,
+          "narabiX": 3,
+          "narabiY": 1
+        },
+        {
+          "syaban": 7,
+          "narabiX": 12,
+          "narabiY": 1
+        },
+        {
+          "syaban": 8,
+          "narabiX": 7,
+          "narabiY": 1
+        },
+        {
+          "syaban": 9,
+          "narabiX": 1,
+          "narabiY": 1
+        }
+      ],
+      "raceNo": 5,
+      "syumoku": "Ｓ級選抜",
+      "denTime": "12:18",
+      "stTime": "12:21",
+      "digetFlag": 0,
+      "narabiFlg": 1,
+      "lineColor": "sanbusen",
+      "line": "三分戦",
+      "seri": 0,
+      "narabiYCnt": 1,
+      "ozzFlg": 1,
+      "resultFlg": 0
+    },
+    {
+      "sInfo": [
+        {
+          "syabanColor": "base_color_1",
+          "syaban": 1,
+          "Yosoin": "△",
+          "senNo": "015323",
+          "senName": "小原　丈一郎",
+          "huken": "青　森",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_2",
+          "syaban": 2,
+          "Yosoin": "○",
+          "senNo": "014249",
+          "senName": "鷲田　幸司",
+          "huken": "福　井",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_3",
+          "syaban": 3,
+          "senNo": "013945",
+          "senName": "福田　知也",
+          "huken": "神奈川",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_4",
+          "syaban": 4,
+          "senNo": "013912",
+          "senName": "金成　和幸",
+          "huken": "福　島",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_5",
+          "syaban": 5,
+          "Yosoin": "◎",
+          "senNo": "014606",
+          "senName": "稲毛　健太",
+          "huken": "和歌山",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_6",
+          "syaban": 6,
+          "senNo": "014313",
+          "senName": "小谷　実",
+          "huken": "京　都",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_7",
+          "syaban": 7,
+          "senNo": "013693",
+          "senName": "藤原　憲征",
+          "huken": "新　潟",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_8",
+          "syaban": 8,
+          "Yosoin": "注",
+          "senNo": "015703",
+          "senName": "牧田　悠生",
+          "huken": "新　潟",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_9",
+          "syaban": 9,
+          "Yosoin": "×",
+          "senNo": "014791",
+          "senName": "木村　弘",
+          "huken": "青　森",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        }
+      ],
+      "nInfo": [
+        {
+          "syaban": 1,
+          "narabiX": 6,
+          "narabiY": 1
+        },
+        {
+          "syaban": 2,
+          "narabiX": 2,
+          "narabiY": 1
+        },
+        {
+          "syaban": 3,
+          "narabiX": 11,
+          "narabiY": 1
+        },
+        {
+          "syaban": 4,
+          "narabiX": 7,
+          "narabiY": 1
+        },
+        {
+          "syaban": 5,
+          "narabiX": 1,
+          "narabiY": 1
+        },
+        {
+          "syaban": 6,
+          "narabiX": 3,
+          "narabiY": 1
+        },
+        {
+          "syaban": 7,
+          "narabiX": 10,
+          "narabiY": 1
+        },
+        {
+          "syaban": 8,
+          "narabiX": 9,
+          "narabiY": 1
+        },
+        {
+          "syaban": 9,
+          "narabiX": 5,
+          "narabiY": 1
+        }
+      ],
+      "raceNo": 6,
+      "syumoku": "Ｓ級選抜",
+      "denTime": "12:42",
+      "stTime": "12:45",
+      "digetFlag": 0,
+      "narabiFlg": 1,
+      "lineColor": "sanbusen",
+      "line": "三分戦",
+      "seri": 0,
+      "narabiYCnt": 1,
+      "ozzFlg": 1,
+      "resultFlg": 0
+    },
+    {
+      "sInfo": [
+        {
+          "syabanColor": "base_color_1",
+          "syaban": 1,
+          "Yosoin": "○",
+          "senNo": "015815",
+          "senName": "栗山　和樹",
+          "huken": "岐　阜",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_2",
+          "syaban": 2,
+          "Yosoin": "注",
+          "senNo": "013744",
+          "senName": "菅原　晃",
+          "huken": "大　分",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_3",
+          "syaban": 3,
+          "Yosoin": "◎",
+          "senNo": "015235",
+          "senName": "嵯峨　昇喜郎",
+          "huken": "青　森",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_4",
+          "syaban": 4,
+          "senNo": "012669",
+          "senName": "伊藤　正樹",
+          "huken": "愛　知",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_5",
+          "syaban": 5,
+          "Yosoin": "×",
+          "senNo": "014350",
+          "senName": "佐藤　雅春",
+          "huken": "宮　城",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_6",
+          "syaban": 6,
+          "senNo": "015064",
+          "senName": "吉武　信太朗",
+          "huken": "愛　媛",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_7",
+          "syaban": 7,
+          "senNo": "015296",
+          "senName": "上田　尭弥",
+          "huken": "熊　本",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_8",
+          "syaban": 8,
+          "senNo": "014051",
+          "senName": "早坂　秀悟",
+          "huken": "茨　城",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_9",
+          "syaban": 9,
+          "Yosoin": "△",
+          "senNo": "013719",
+          "senName": "吉田　敏洋",
+          "huken": "愛　知",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        }
+      ],
+      "nInfo": [
+        {
+          "syaban": 1,
+          "narabiX": 1,
+          "narabiY": 1
+        },
+        {
+          "syaban": 2,
+          "narabiX": 6,
+          "narabiY": 1
+        },
+        {
+          "syaban": 3,
+          "narabiX": 8,
+          "narabiY": 1
+        },
+        {
+          "syaban": 4,
+          "narabiX": 3,
+          "narabiY": 1
+        },
+        {
+          "syaban": 5,
+          "narabiX": 9,
+          "narabiY": 1
+        },
+        {
+          "syaban": 6,
+          "narabiX": 11,
+          "narabiY": 1
+        },
+        {
+          "syaban": 7,
+          "narabiX": 5,
+          "narabiY": 1
+        },
+        {
+          "syaban": 8,
+          "narabiX": 13,
+          "narabiY": 1
+        },
+        {
+          "syaban": 9,
+          "narabiX": 2,
+          "narabiY": 1
+        }
+      ],
+      "raceNo": 7,
+      "syumoku": "Ｓ級特選",
+      "denTime": "13:07",
+      "stTime": "13:10",
+      "digetFlag": 0,
+      "narabiFlg": 1,
+      "lineColor": "komagire",
+      "line": "コマ切れ",
+      "seri": 0,
+      "narabiYCnt": 1,
+      "ozzFlg": 1,
+      "resultFlg": 0
+    },
+    {
+      "sInfo": [
+        {
+          "syabanColor": "base_color_1",
+          "syaban": 1,
+          "Yosoin": "注",
+          "senNo": "014552",
+          "senName": "福島　武士",
+          "huken": "香　川",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_2",
+          "syaban": 2,
+          "senNo": "015170",
+          "senName": "川越　勇星",
+          "huken": "神奈川",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_3",
+          "syaban": 3,
+          "Yosoin": "◎",
+          "senNo": "015516",
+          "senName": "木村　皆斗",
+          "huken": "茨　城",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_4",
+          "syaban": 4,
+          "senNo": "015389",
+          "senName": "宮崎　大空",
+          "huken": "熊　本",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "assenColor": "body_base_color",
+          "assen": "(追加)",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_5",
+          "syaban": 5,
+          "Yosoin": "△",
+          "senNo": "014071",
+          "senName": "朝倉　佳弘",
+          "huken": "東　京",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_6",
+          "syaban": 6,
+          "senNo": "015602",
+          "senName": "比佐　宝太",
+          "huken": "福　島",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_7",
+          "syaban": 7,
+          "Yosoin": "×",
+          "senNo": "014882",
+          "senName": "山本　直",
+          "huken": "岡　山",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_8",
+          "syaban": 8,
+          "senNo": "013855",
+          "senName": "近藤　俊明",
+          "huken": "神奈川",
+          "kyaku": "追",
+          "assenColor": "body_base_color",
+          "assen": "(追加)",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_9",
+          "syaban": 9,
+          "Yosoin": "○",
+          "senNo": "015381",
+          "senName": "岩谷　拓磨",
+          "huken": "福　岡",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "assenColor": "body_base_color",
+          "assen": "(追加)",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        }
+      ],
+      "nInfo": [
+        {
+          "syaban": 1,
+          "narabiX": 2,
+          "narabiY": 1
+        },
+        {
+          "syaban": 2,
+          "narabiX": 7,
+          "narabiY": 1
+        },
+        {
+          "syaban": 3,
+          "narabiX": 10,
+          "narabiY": 1
+        },
+        {
+          "syaban": 4,
+          "narabiX": 5,
+          "narabiY": 1
+        },
+        {
+          "syaban": 5,
+          "narabiX": 11,
+          "narabiY": 1
+        },
+        {
+          "syaban": 6,
+          "narabiX": 13,
+          "narabiY": 1
+        },
+        {
+          "syaban": 7,
+          "narabiX": 1,
+          "narabiY": 1
+        },
+        {
+          "syaban": 8,
+          "narabiX": 8,
+          "narabiY": 1
+        },
+        {
+          "syaban": 9,
+          "narabiX": 4,
+          "narabiY": 1
+        }
+      ],
+      "raceNo": 8,
+      "syumoku": "Ｓ級特選",
+      "denTime": "13:32",
+      "stTime": "13:35",
+      "digetFlag": 0,
+      "narabiFlg": 1,
+      "lineColor": "yonbusen",
+      "line": "四分戦",
+      "seri": 0,
+      "narabiYCnt": 1,
+      "ozzFlg": 1,
+      "resultFlg": 0
+    },
+    {
+      "sInfo": [
+        {
+          "syabanColor": "base_color_1",
+          "syaban": 1,
+          "Yosoin": "×",
+          "senNo": "015660",
+          "senName": "河崎　正晴",
+          "huken": "熊　本",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_2",
+          "syaban": 2,
+          "Yosoin": "○",
+          "senNo": "014168",
+          "senName": "高橋　和也",
+          "huken": "愛　知",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_3",
+          "syaban": 3,
+          "Yosoin": "注",
+          "senNo": "015598",
+          "senName": "大川　剛",
+          "huken": "青　森",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_4",
+          "syaban": 4,
+          "senNo": "015370",
+          "senName": "城戸　俊潔",
+          "huken": "岡　山",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_5",
+          "syaban": 5,
+          "Yosoin": "△",
+          "senNo": "015826",
+          "senName": "久田　朔",
+          "huken": "大　阪",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_6",
+          "syaban": 6,
+          "senNo": "014435",
+          "senName": "伊藤　勝太",
+          "huken": "愛　知",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_7",
+          "syaban": 7,
+          "senNo": "013883",
+          "senName": "高津　晃治",
+          "huken": "岡　山",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_8",
+          "syaban": 8,
+          "senNo": "015211",
+          "senName": "平尾　一晃",
+          "huken": "長　崎",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_9",
+          "syaban": 9,
+          "Yosoin": "◎",
+          "senNo": "015038",
+          "senName": "山岸　佳太",
+          "huken": "茨　城",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        }
+      ],
+      "nInfo": [
+        {
+          "syaban": 1,
+          "narabiX": 1,
+          "narabiY": 1
+        },
+        {
+          "syaban": 2,
+          "narabiX": 5,
+          "narabiY": 1
+        },
+        {
+          "syaban": 3,
+          "narabiX": 11,
+          "narabiY": 1
+        },
+        {
+          "syaban": 4,
+          "narabiX": 8,
+          "narabiY": 1
+        },
+        {
+          "syaban": 5,
+          "narabiX": 4,
+          "narabiY": 1
+        },
+        {
+          "syaban": 6,
+          "narabiX": 6,
+          "narabiY": 1
+        },
+        {
+          "syaban": 7,
+          "narabiX": 9,
+          "narabiY": 1
+        },
+        {
+          "syaban": 8,
+          "narabiX": 2,
+          "narabiY": 1
+        },
+        {
+          "syaban": 9,
+          "narabiX": 13,
+          "narabiY": 1
+        }
+      ],
+      "raceNo": 9,
+      "syumoku": "Ｓ級特選",
+      "denTime": "13:59",
+      "stTime": "14:02",
+      "digetFlag": 0,
+      "narabiFlg": 1,
+      "lineColor": "komagire",
+      "line": "コマ切れ",
+      "seri": 0,
+      "narabiYCnt": 1,
+      "ozzFlg": 1,
+      "resultFlg": 0
+    },
+    {
+      "sInfo": [
+        {
+          "syabanColor": "base_color_1",
+          "syaban": 1,
+          "Yosoin": "×",
+          "senNo": "015825",
+          "senName": "南部　翔大",
+          "huken": "大　阪",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_2",
+          "syaban": 2,
+          "Yosoin": "注",
+          "senNo": "013118",
+          "senName": "山内　卓也",
+          "huken": "愛　知",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_3",
+          "syaban": 3,
+          "Yosoin": "○",
+          "senNo": "015254",
+          "senName": "鈴木　輝大",
+          "huken": "東　京",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_4",
+          "syaban": 4,
+          "senNo": "015050",
+          "senName": "堀内　俊介",
+          "huken": "神奈川",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_5",
+          "syaban": 5,
+          "Yosoin": "△",
+          "senNo": "015006",
+          "senName": "石塚　輪太郎",
+          "huken": "和歌山",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_6",
+          "syaban": 6,
+          "senNo": "015446",
+          "senName": "林　敬宏",
+          "huken": "愛　知",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_7",
+          "syaban": 7,
+          "Yosoin": "◎",
+          "senNo": "015522",
+          "senName": "堀江　省吾",
+          "huken": "長　野",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_8",
+          "syaban": 8,
+          "senNo": "014657",
+          "senName": "野中　祐志",
+          "huken": "埼　玉",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_9",
+          "syaban": 9,
+          "senNo": "013328",
+          "senName": "萩原　孝之",
+          "huken": "静　岡",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        }
+      ],
+      "nInfo": [
+        {
+          "syaban": 1,
+          "narabiX": 1,
+          "narabiY": 1
+        },
+        {
+          "syaban": 2,
+          "narabiX": 5,
+          "narabiY": 1
+        },
+        {
+          "syaban": 3,
+          "narabiX": 8,
+          "narabiY": 1
+        },
+        {
+          "syaban": 4,
+          "narabiX": 11,
+          "narabiY": 1
+        },
+        {
+          "syaban": 5,
+          "narabiX": 2,
+          "narabiY": 1
+        },
+        {
+          "syaban": 6,
+          "narabiX": 4,
+          "narabiY": 1
+        },
+        {
+          "syaban": 7,
+          "narabiX": 7,
+          "narabiY": 1
+        },
+        {
+          "syaban": 8,
+          "narabiX": 9,
+          "narabiY": 1
+        },
+        {
+          "syaban": 9,
+          "narabiX": 12,
+          "narabiY": 1
+        }
+      ],
+      "raceNo": 10,
+      "syumoku": "Ｓ級特秀",
+      "denTime": "14:26",
+      "stTime": "14:29",
+      "digetFlag": 0,
+      "narabiFlg": 1,
+      "lineColor": "yonbusen",
+      "line": "四分戦",
+      "seri": 0,
+      "narabiYCnt": 1,
+      "ozzFlg": 1,
+      "resultFlg": 0
+    },
+    {
+      "sInfo": [
+        {
+          "syabanColor": "base_color_1",
+          "syaban": 1,
+          "Yosoin": "△",
+          "senNo": "015604",
+          "senName": "安彦　統賀",
+          "huken": "埼　玉",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "assenColor": "body_base_color",
+          "assen": "(追加)",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_2",
+          "syaban": 2,
+          "Yosoin": "注",
+          "senNo": "012889",
+          "senName": "丸山　啓一",
+          "huken": "静　岡",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_3",
+          "syaban": 3,
+          "Yosoin": "◎",
+          "senNo": "015272",
+          "senName": "中釜　章成",
+          "huken": "大　阪",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_4",
+          "syaban": 4,
+          "Yosoin": "×",
+          "senNo": "015106",
+          "senName": "大石　崇晴",
+          "huken": "大　阪",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_5",
+          "syaban": 5,
+          "senNo": "015836",
+          "senName": "遠藤　拓巳",
+          "huken": "香　川",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_6",
+          "syaban": 6,
+          "senNo": "014465",
+          "senName": "村上　直久",
+          "huken": "神奈川",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_7",
+          "syaban": 7,
+          "Yosoin": "○",
+          "senNo": "014795",
+          "senName": "櫻井　正孝",
+          "huken": "宮　城",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_8",
+          "syaban": 8,
+          "senNo": "015046",
+          "senName": "山本　紳貴",
+          "huken": "千　葉",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_9",
+          "syaban": 9,
+          "senNo": "014640",
+          "senName": "新山　将史",
+          "huken": "青　森",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        }
+      ],
+      "nInfo": [
+        {
+          "syaban": 1,
+          "narabiX": 1,
+          "narabiY": 1
+        },
+        {
+          "syaban": 2,
+          "narabiX": 6,
+          "narabiY": 1
+        },
+        {
+          "syaban": 3,
+          "narabiX": 9,
+          "narabiY": 1
+        },
+        {
+          "syaban": 4,
+          "narabiX": 10,
+          "narabiY": 1
+        },
+        {
+          "syaban": 5,
+          "narabiX": 12,
+          "narabiY": 1
+        },
+        {
+          "syaban": 6,
+          "narabiX": 5,
+          "narabiY": 1
+        },
+        {
+          "syaban": 7,
+          "narabiX": 2,
+          "narabiY": 1
+        },
+        {
+          "syaban": 8,
+          "narabiX": 7,
+          "narabiY": 1
+        },
+        {
+          "syaban": 9,
+          "narabiX": 3,
+          "narabiY": 1
+        }
+      ],
+      "raceNo": 11,
+      "syumoku": "Ｓ級特秀",
+      "denTime": "14:56",
+      "stTime": "14:59",
+      "digetFlag": 0,
+      "narabiFlg": 1,
+      "lineColor": "sanbusen",
+      "line": "三分戦",
+      "seri": 0,
+      "narabiYCnt": 1,
+      "ozzFlg": 1,
+      "resultFlg": 0
+    },
+    {
+      "sInfo": [
+        {
+          "syabanColor": "base_color_1",
+          "syaban": 1,
+          "Yosoin": "△",
+          "senNo": "015620",
+          "senName": "纐纈　洸翔",
+          "huken": "愛　知",
+          "kyakuColor": "color_red",
+          "kyaku": "両",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_2",
+          "syaban": 2,
+          "Yosoin": "○",
+          "senNo": "014127",
+          "senName": "永澤　剛",
+          "huken": "青　森",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_3",
+          "syaban": 3,
+          "senNo": "015731",
+          "senName": "西田　優大",
+          "huken": "広　島",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_4",
+          "syaban": 4,
+          "senNo": "015336",
+          "senName": "小畑　勝広",
+          "huken": "茨　城",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_5",
+          "syaban": 5,
+          "senNo": "014472",
+          "senName": "坂口　晃輔",
+          "huken": "三　重",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_6",
+          "syaban": 6,
+          "senNo": "014664",
+          "senName": "志村　龍己",
+          "huken": "山　梨",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_7",
+          "syaban": 7,
+          "Yosoin": "×",
+          "senNo": "014190",
+          "senName": "木村　隆弘",
+          "huken": "徳　島",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_8",
+          "syaban": 8,
+          "Yosoin": "◎",
+          "senNo": "015527",
+          "senName": "北井　佑季",
+          "huken": "神奈川",
+          "kyakuColor": "color_red",
+          "kyaku": "逃",
+          "assenColor": "body_base_color",
+          "assen": "(追加)",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        },
+        {
+          "syabanColor": "base_color_9",
+          "syaban": 9,
+          "Yosoin": "注",
+          "senNo": "014588",
+          "senName": "柿澤　大貴",
+          "huken": "長　野",
+          "kyaku": "追",
+          "itiosiFlag": 0,
+          "aisyoFlag": 0
+        }
+      ],
+      "nInfo": [
+        {
+          "syaban": 1,
+          "narabiX": 1,
+          "narabiY": 1
+        },
+        {
+          "syaban": 2,
+          "narabiX": 5,
+          "narabiY": 1
+        },
+        {
+          "syaban": 3,
+          "narabiX": 11,
+          "narabiY": 1
+        },
+        {
+          "syaban": 4,
+          "narabiX": 7,
+          "narabiY": 1
+        },
+        {
+          "syaban": 5,
+          "narabiX": 2,
+          "narabiY": 1
+        },
+        {
+          "syaban": 6,
+          "narabiX": 9,
+          "narabiY": 1
+        },
+        {
+          "syaban": 7,
+          "narabiX": 12,
+          "narabiY": 1
+        },
+        {
+          "syaban": 8,
+          "narabiX": 4,
+          "narabiY": 1
+        },
+        {
+          "syaban": 9,
+          "narabiX": 8,
+          "narabiY": 1
+        }
+      ],
+      "raceNo": 12,
+      "syumoku": "Ｓ級決勝",
+      "denTime": "15:27",
+      "stTime": "15:30",
+      "digetFlag": 0,
+      "narabiFlg": 1,
+      "lineColor": "yonbusen",
+      "line": "四分戦",
+      "seri": 0,
+      "narabiYCnt": 1,
+      "ozzFlg": 1,
+      "resultFlg": 0
+    }
+  ],
+  "syusouDispFlag": 1,
+  "keirinCd": "42",
+  "kaisaihi": "20260426",
+  "lastUpdateTime": "2026/04/26 07:02&nbsp;更新",
+  "dlgMsg": "1つ以上「連続再生」を選択してください。",
+  "narabiMei": "中部競輪記者クラブ",
+  "YosoinMei": "中部競輪記者クラブ",
+  "legendDspFlag": 0,
+  "resultCd": 0,
+  "reqprm": {
+    "bkcd": "42",
+    "kday": "20260426"
+  },
+  "writeANA": false
+}

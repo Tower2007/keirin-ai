@@ -1,0 +1,239 @@
+{
+  "C0201data": {
+    "encSelParaK": "u93Y_4IZiF1UgerS4eAiihG4a5ohH0nkDvvQhsN_hls",
+    "encSelParaR": "u93Y_4IZiF1UgerS4eAiil9V-IoKJuoqYPBlkNPP5F0",
+    "selKaisai": "20260426",
+    "selKjyoCd": "42",
+    "selRaceNo": 1,
+    "encParaS": "u93Y_4IZiF1UgerS4eAiisE_BRENlWw5L9Sno-FjkPs",
+    "imgGradeSrc": "/pc/static/img/icon/grade/ico_g3.png",
+    "imgGradeAlt": "G3",
+    "raceName": "アジア・アジアパラ大会協賛競輪",
+    "joName": "名古屋競輪場",
+    "imgFuka1Src": "/pc/static/img/icon/KaisaiIcon/ico_kaisaihuka_01.png",
+    "imgFuka1Alt": "01",
+    "imgFuka2Src": "",
+    "imgFuka2Alt": "",
+    "joInfo": "",
+    "hhMessage": "",
+    "flgRaceCancel": false,
+    "flgSectionCancel": false,
+    "cntRace": 0,
+    "flgPrevBet": false,
+    "cidPrevBetBgcolor": "zenjitu_hatubai_bg_color",
+    "imgPushSrc": "",
+    "imgPushAlt": "",
+    "imgCongenialSrc": "",
+    "imgCongenialAlt": "",
+    "imgInterviewSrc": "/pc/static/img/icon/ico_film.png",
+    "imgInterviewAlt": "ダイジェストボタン",
+    "flgActvKekkaList": false,
+    "flgRecodes": true,
+    "flgActvSyumoku": true,
+    "flgActvDugest": false,
+    "flgActvSyutujyo": true,
+    "flgLogin": false,
+    "C0201ticker": [
+      {
+        "vPattern": "0",
+        "tickText": "★4月23日(木)～26日(日)は場内でイベント盛りだくさん！元アスリートによるトークショーも実施！★詳細は公式HPでチェック！",
+        "cidFontColor": "color_white"
+      },
+      {
+        "vPattern": "0",
+        "tickText": "★ひつまぶしセットが当たる！★金シャチ5キャンペーンを競輪公式投票CTCにて実施中！！今回は特別編！通常の5倍の人数に当選のチャンス！？",
+        "cidFontColor": "color_white"
+      }
+    ],
+    "C0201kaisai": [
+      {
+        "txtEventDate": "04/23",
+        "txtDaily": "(初日)",
+        "encParaK": "u93Y_4IZiF1UgerS4eAiisE_BRENlWw5L9Sno-FjkPs",
+        "flgSelect": true
+      },
+      {
+        "txtEventDate": "04/24",
+        "txtDaily": "(2日目)",
+        "encParaK": "u93Y_4IZiF1UgerS4eAiitBVar05ZnFdfrG0KU3ibh0",
+        "flgSelect": true
+      },
+      {
+        "txtEventDate": "04/25",
+        "txtDaily": "(3日目)",
+        "encParaK": "u93Y_4IZiF1UgerS4eAiis-Yv57RZnrYtRTMIlLnXqo",
+        "flgSelect": true
+      },
+      {
+        "txtEventDate": "04/26",
+        "txtDaily": "(最終日)",
+        "encParaK": "u93Y_4IZiF1UgerS4eAiihG4a5ohH0nkDvvQhsN_hls",
+        "flgSelect": true
+      }
+    ],
+    "C0201race": [
+      {
+        "flgRaceEnd": false,
+        "flgActvRaceBtn": true,
+        "encParaR": "u93Y_4IZiF1UgerS4eAiil9V-IoKJuoqYPBlkNPP5F0",
+        "rcvKekka": "0",
+        "rcvRefund": "0",
+        "rcvOdds": "1"
+      },
+      {
+        "flgRaceEnd": false,
+        "flgActvRaceBtn": true,
+        "encParaR": "u93Y_4IZiF1UgerS4eAiitooyLHoy4ZCr52ty8LhGTw",
+        "rcvKekka": "0",
+        "rcvRefund": "0",
+        "rcvOdds": "1"
+      },
+      {
+        "flgRaceEnd": false,
+        "flgActvRaceBtn": true,
+        "encParaR": "u93Y_4IZiF1UgerS4eAiisST3JFte2Pf9uL3LpidO6M",
+        "rcvKekka": "0",
+        "rcvRefund": "0",
+        "rcvOdds": "1"
+      },
+      {
+        "flgRaceEnd": false,
+        "flgActvRaceBtn": true,
+        "encParaR": "u93Y_4IZiF1UgerS4eAiiowQTwwN47dpg9dsQzg-ar8",
+        "rcvKekka": "0",
+        "rcvRefund": "0",
+        "rcvOdds": "1"
+      },
+      {
+        "flgRaceEnd": false,
+        "flgActvRaceBtn": true,
+        "encParaR": "u93Y_4IZiF1UgerS4eAiipIMqdLpGfjacSDIbfKjHRo",
+        "rcvKekka": "0",
+        "rcvRefund": "0",
+        "rcvOdds": "1"
+      },
+      {
+        "flgRaceEnd": false,
+        "flgActvRaceBtn": true,
+        "encParaR": "u93Y_4IZiF1UgerS4eAiihs1dsOERFPjgz9hGLH3Fis",
+        "rcvKekka": "0",
+        "rcvRefund": "0",
+        "rcvOdds": "1"
+      },
+      {
+        "flgRaceEnd": false,
+        "flgActvRaceBtn": true,
+        "encParaR": "u93Y_4IZiF1UgerS4eAiin8LMzMPfR2Pg35Q5QDUI3k",
+        "rcvKekka": "0",
+        "rcvRefund": "0",
+        "rcvOdds": "1"
+      },
+      {
+        "flgRaceEnd": false,
+        "flgActvRaceBtn": true,
+        "encParaR": "u93Y_4IZiF1UgerS4eAiiv6H-YLH7UA3rUkudsiwLfc",
+        "rcvKekka": "0",
+        "rcvRefund": "0",
+        "rcvOdds": "1"
+      },
+      {
+        "flgRaceEnd": false,
+        "flgActvRaceBtn": true,
+        "encParaR": "u93Y_4IZiF1UgerS4eAiijr5EBIVm7dXA0MMZL9d3Ho",
+        "rcvKekka": "0",
+        "rcvRefund": "0",
+        "rcvOdds": "1"
+      },
+      {
+        "flgRaceEnd": false,
+        "flgActvRaceBtn": true,
+        "encParaR": "u93Y_4IZiF1UgerS4eAiitXRf8G2DCk89xC8ZVP8zsk",
+        "rcvKekka": "0",
+        "rcvRefund": "0",
+        "rcvOdds": "1"
+      },
+      {
+        "flgRaceEnd": false,
+        "flgActvRaceBtn": true,
+        "encParaR": "u93Y_4IZiF1UgerS4eAiihPxzIzPTthNbY3CSc3__Xg",
+        "rcvKekka": "0",
+        "rcvRefund": "0",
+        "rcvOdds": "1"
+      },
+      {
+        "flgRaceEnd": false,
+        "flgActvRaceBtn": true,
+        "encParaR": "u93Y_4IZiF1UgerS4eAiioywuL7RGK1tIKSSh2g3o6I",
+        "rcvKekka": "0",
+        "rcvRefund": "0",
+        "rcvOdds": "1"
+      }
+    ],
+    "C0201interview": [],
+    "C0201racedtl": {
+      "syumoku": "Ｓ級一般",
+      "kyori": 2025,
+      "syukai": 5,
+      "nameKyosou": "先固",
+      "aftStartTime": "10:45",
+      "aftBetTime": "10:42",
+      "bfrStartTime": "10:45",
+      "bfrBetTime": "10:42",
+      "flgViewPut": true,
+      "C0201sensyu": [
+        {
+          "imgPlayerPictSrc": "/pc/dfw/portal/picture/sen01/sen0155/015507_00.jpg",
+          "imgPlayerPictAlt": "上遠野",
+          "cidCarNum": "base_color_1",
+          "carNum": 1,
+          "namePlayerSei": "上遠野",
+          "numPlayer": "015507",
+          "flgPush": false,
+          "flgCongenial": false
+        },
+        {
+          "imgPlayerPictSrc": "/pc/dfw/portal/picture/sen01/sen0131/013197_00.jpg",
+          "imgPlayerPictAlt": "鈴木",
+          "cidCarNum": "base_color_2",
+          "carNum": 2,
+          "namePlayerSei": "鈴木",
+          "numPlayer": "013197",
+          "flgPush": false,
+          "flgCongenial": false
+        },
+        {
+          "imgPlayerPictSrc": "/pc/dfw/portal/picture/sen01/sen0138/013810_00.jpg",
+          "imgPlayerPictAlt": "良永",
+          "cidCarNum": "base_color_3",
+          "carNum": 3,
+          "namePlayerSei": "良永",
+          "numPlayer": "013810",
+          "flgPush": false,
+          "flgCongenial": false
+        },
+        {
+          "imgPlayerPictSrc": "/pc/dfw/portal/picture/sen01/sen0152/015236_00.jpg",
+          "imgPlayerPictAlt": "藤根",
+          "cidCarNum": "base_color_4",
+          "carNum": 4,
+          "namePlayerSei": "藤根",
+          "numPlayer": "015236",
+          "flgPush": false,
+          "flgCongenial": false
+        },
+        {
+          "imgPlayerPictSrc": "/pc/dfw/portal/picture/sen01/sen0155/015536_00.jpg",
+          "imgPlayerPictAlt": "疋田",
+          "cidCarNum": "base_color_5",
+          "carNum": 5,
+          "namePlayerSei": "疋田",
+          "numPlayer": "015536",
+          "flgPush": false,
+          "flgCongenial": false
+        }
+      ]
+    }
+  },
+  "resultCd": 0,
+  "writeANA": false
+}
