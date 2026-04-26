@@ -158,3 +158,125 @@ def parse_race_lines(
                 "narabi_y": _clean_int(n.get("narabiY")),
             })
     return rows
+
+
+# ─── JSJ002 (選手成績データ、全12R分まとめて) ─────────────
+
+def parse_race_stats(
+    place_code: int, race_date: str, jsj002: dict,
+) -> list[dict]:
+    """JSJ002 → race_stats 行リスト (全レース x 全選手)。"""
+    rows = []
+    for race in jsj002.get("raceInfo", []):
+        race_no = _clean_int(race.get("raceNo"))
+        race_meta = {
+            "shumoku_name": _clean_str(race.get("shumokuName")),
+            "kyori": _clean_int(race.get("kyori")),
+            "shukai": _clean_int(race.get("shukai")),
+            "kyoso_shurui": _clean_str(race.get("kyosoShurui")),
+            "yudo_sensyu": _clean_str(race.get("yudoSensyuName")),
+        }
+        for p in race.get("sensyuTypeInfo", []):
+            rows.append({
+                "race_date": race_date,
+                "place_code": place_code,
+                "race_no": race_no,
+                "car_no": _clean_int(p.get("syaban")),
+                "player_code": _clean_str(p.get("sensyuRegistNo")),
+                "player_name": _clean_str(p.get("sensyuName")),
+                "prefecture": _clean_str(p.get("huKen")),
+                "kyuhan": _clean_str(p.get("kyuhan")),  # S級S/S1/S2/A1/A2 等
+                "prev_kyuhan": _clean_str(p.get("prevKyuhan")),
+                "kyakusitu": _clean_str(p.get("kyakusitu")),  # 逃/追/両
+                "sotugyouki": _clean_int(p.get("sotugyouki")),
+                "age": _clean_int(p.get("age")),
+                "heikin_tokuten": _clean_float(p.get("heikinTokuten")),
+                "nige_cnt": _clean_int(p.get("nigeCnt")),
+                "makuri_cnt": _clean_int(p.get("makuriCnt")),
+                "sasi_cnt": _clean_int(p.get("sasiCnt")),
+                "mark_cnt": _clean_int(p.get("markCnt")),
+                "back_cnt": _clean_int(p.get("backCnt")),
+                "home_tori": _clean_int(p.get("homeTori")),
+                "st_tori": _clean_int(p.get("stTori")),
+                "syouritu": _clean_float(p.get("syouritu")),
+                "rentairitu2": _clean_float(p.get("rentairitu2")),
+                "rentairitu3": _clean_float(p.get("rentairitu3")),
+                "ketujyou_tuika_hojyu": _clean_str(p.get("ketujyouTuikaHojyu")),
+                **race_meta,
+            })
+    return rows
+
+
+# ─── JSJ012 (着順 + 払戻金) ──────────────────────────────
+
+def parse_race_results(
+    place_code: int, race_date: str, race_no: int, jsj012: dict,
+) -> list[dict]:
+    """JSJ012 → race_results 行リスト (1レース分)。"""
+    rows = []
+    for r in jsj012.get("tyakujyunItemSubData", []):
+        rows.append({
+            "race_date": race_date,
+            "place_code": place_code,
+            "race_no": race_no,
+            "tyaku": _clean_int(r.get("tyaku")),  # 着順
+            "car_no": _clean_int(r.get("syaban")),
+            "player_code": _clean_str(r.get("sensyuRegistNo")),
+            "player_name": _clean_str(r.get("sensyuName")),
+            "age": _clean_int(r.get("age")),
+            "prefecture": _clean_str(r.get("huken")),
+            "sotugyouki": _clean_int(r.get("sotugyouki")),
+            "kyuhan": _clean_str(r.get("kyuhan")),
+            "tyakusa": _clean_str(r.get("tyakusa")),  # 着差
+            "agari": _clean_float(r.get("agari")),  # 上り
+            "kimarite": _clean_str(r.get("kimarite")),  # 決まり手
+            "bh": _clean_str(r.get("BH")),  # B(バック取り)/H(ホーム取り)
+            "in_line_jyuni": _clean_str(r.get("inLineJyuni")),
+            "tenki": _clean_str(jsj012.get("tenki")),  # 天気
+            "husoku": _clean_str(jsj012.get("husoku")),  # 風速
+        })
+    return rows
+
+
+# 払戻券種コード → 名称
+_BET_TYPE_MAP = {
+    "WH2": "枠複",
+    "WT2": "枠単",
+    "SH2": "二車複",
+    "ST2": "二車単",
+    "RH3": "三連複",
+    "RT3": "三連単",
+    "W": "ワイド",
+}
+
+
+def parse_payouts(
+    place_code: int, race_date: str, race_no: int, jsj012: dict,
+) -> list[dict]:
+    """JSJ012 → payouts 行リスト (1レース x 7券種 x 当選組合せ)。"""
+    rows = []
+    hgsd = jsj012.get("haraiGakuSubData", {})
+    for code, name in _BET_TYPE_MAP.items():
+        items = hgsd.get(f"{code}HaraiGakuDispItemSubData", [])
+        for item in items:
+            kumi_ban = _clean_str(item.get("kumiBan"))
+            harai_gaku_raw = _clean_str(item.get("haraiGaku"))
+            # 「【未発売】」「-」等は payout NULL
+            if not item.get("kumiDispFlg") or harai_gaku_raw in (None, "-", "【未発売】"):
+                continue
+            # カンマ区切りを除去して数値化: "8,460" → 8460
+            harai_gaku = _clean_int(harai_gaku_raw.replace(",", "")) if harai_gaku_raw else None
+            ninki_raw = _clean_str(item.get("ninki"))
+            ninki = _clean_int(ninki_raw.strip("()")) if ninki_raw else None
+
+            rows.append({
+                "race_date": race_date,
+                "place_code": place_code,
+                "race_no": race_no,
+                "bet_type": code,
+                "bet_name": name,
+                "kumi_ban": kumi_ban,
+                "payout": harai_gaku,
+                "popularity": ninki,
+            })
+    return rows

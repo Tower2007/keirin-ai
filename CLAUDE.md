@@ -26,11 +26,14 @@ data/            # CSV + スモーク (.gitignore)
 
 ## CSV ファイル構成 (data/)
 
-| ファイル | 内容 | キー |
-|---------|------|------|
-| race_meta.csv | 開催メタ（場・グレード・レース名） | race_date + place_code |
-| race_entries.csv | 出走表（選手・脚質・予想印） | race_date + place_code + race_no + car_no |
-| race_lines.csv | ライン情報 (narabiX/narabiY) | race_date + place_code + race_no + car_no |
+| ファイル | 内容 | キー | 取得タイミング |
+|---------|------|------|------|
+| race_meta.csv | 開催メタ（場・グレード・レース名） | race_date + place_code | レース前後どちらでも |
+| race_entries.csv | 出走表（選手・脚質・予想印） | race_date + place_code + race_no + car_no | レース前後どちらでも |
+| race_lines.csv | ライン情報 (narabiX/narabiY) | race_date + place_code + race_no + car_no | **レース前のみ**（完了後は nInfo 空配列） |
+| race_stats.csv | 選手成績（勝率/連対率/戦法回数等） | race_date + place_code + race_no + car_no | レース前後どちらでも (JSJ002) |
+| race_results.csv | 着順・決まり手・天気 | race_date + place_code + race_no + car_no | **レース完了後のみ** (JSJ012) |
+| payouts.csv | 払戻金 (7券種) | race_date + place_code + race_no + bet_type + kumi_ban | **レース完了後のみ** (JSJ012) |
 
 ## keirin.jp スクレイピング仕様
 
@@ -40,12 +43,13 @@ data/            # CSV + スモーク (.gitignore)
 
 ### 主要エンドポイント (全て GET、CSRF 不要)
 
-| 用途 | URL | 抽出キー |
+| 用途 | URL | データ |
 |---|---|---|
-| 当日全場レース一覧 | `GET /pc/json?type=JSJ048&...` | レスポンス本体（純JSON） |
-| 開催プログラム | `GET /pc/dfw/dataplaza/guest/raceprogram?KCD=&KST=YYYYMMDD` | `jsonData['PC0201']` |
-| 出走表一覧（全12R） | `GET /pc/racelist?encp={encParaR}` | `jsonData['PJ0305']` |
-| レース詳細 | `GET /pc/racelive?encp={encParaR}` | `jsonData['PC0201']/'PJ0314'/'PJ0315'` |
+| 当日全場レース一覧 | `GET /pc/json?type=JSJ048&...` | 純JSON |
+| 開催プログラム | `GET /pc/dfw/dataplaza/guest/raceprogram?KCD=&KST=YYYYMMDD` | HTML 内 `jsonData['PC0201']` |
+| 出走表一覧（全12R） | `GET /pc/racelist?encp={encParaR}` | HTML 内 `jsonData['PJ0305']` |
+| 選手成績 (全12R分) | `GET /pc/json?type=JSJ002&encp={encParaR}` | 純JSON、`raceInfo[12].sensyuTypeInfo[]` |
+| 結果 + 払戻 (1R分) | `GET /pc/json?type=JSJ012&encp={encParaR}` | 純JSON、`tyakujyunItemSubData` + `haraiGakuSubData` |
 
 - セッションCookie 必須: 初回 `/pc/top` を踏んで取得
 - リクエスト間隔: 0.8秒 (`.env` の `KEIRIN_REQUEST_DELAY_SEC`)
@@ -75,11 +79,24 @@ data/            # CSV + スモーク (.gitignore)
 
 ## Phase ロードマップ
 
-- ✅ **Phase 1**: 開催メタ・出走表・ライン情報 → CSV (現在地)
-- ⏳ **Phase 2**: オッズ・結果・払戻金エンドポイント追加調査 + 取り込み
-- ⏳ **Phase 3**: backfill.py（5年分一括取得）
-- ⏳ **Phase 4**: Supabase 移行 (auto-racing-ai と同じ構成)
-- ⏳ **Phase 5**: LightGBM での予想検証
+- ✅ **Phase 1**: 開催メタ・出走表・ライン情報 → CSV
+- ✅ **Phase 2**: 選手成績 (JSJ002)・結果＋払戻 (JSJ012) (現在地)
+- ⏳ **Phase 3**: 事前オッズ取得 (要ログイン or netkeirin等の代替)
+- ⏳ **Phase 4**: backfill.py (5年分一括取得)
+- ⏳ **Phase 5**: Supabase 移行 (auto-racing-ai と同じ構成)
+- ⏳ **Phase 6**: LightGBM での予想検証
+
+## 払戻券種コード
+
+| code | 名称 |
+|---|---|
+| WH2 | 枠複（多くは未発売） |
+| WT2 | 枠単（多くは未発売） |
+| SH2 | 二車複 |
+| ST2 | 二車単 |
+| RH3 | 三連複 |
+| RT3 | 三連単 |
+| W | ワイド（3組合せ返却） |
 
 ## 既知の注意点
 

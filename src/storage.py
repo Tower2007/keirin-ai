@@ -28,6 +28,29 @@ CSV_SCHEMAS: dict[str, list[str]] = {
         "race_date", "place_code", "race_no", "car_no",
         "narabi_x", "narabi_y",
     ],
+    "race_stats.csv": [
+        "race_date", "place_code", "race_no", "car_no",
+        "player_code", "player_name", "prefecture",
+        "kyuhan", "prev_kyuhan", "kyakusitu",
+        "sotugyouki", "age", "heikin_tokuten",
+        "nige_cnt", "makuri_cnt", "sasi_cnt", "mark_cnt", "back_cnt",
+        "home_tori", "st_tori",
+        "syouritu", "rentairitu2", "rentairitu3",
+        "ketujyou_tuika_hojyu",
+        "shumoku_name", "kyori", "shukai", "kyoso_shurui", "yudo_sensyu",
+    ],
+    "race_results.csv": [
+        "race_date", "place_code", "race_no", "tyaku", "car_no",
+        "player_code", "player_name", "age", "prefecture",
+        "sotugyouki", "kyuhan",
+        "tyakusa", "agari", "kimarite", "bh", "in_line_jyuni",
+        "tenki", "husoku",
+    ],
+    "payouts.csv": [
+        "race_date", "place_code", "race_no",
+        "bet_type", "bet_name", "kumi_ban",
+        "payout", "popularity",
+    ],
 }
 
 

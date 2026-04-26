@@ -1,11 +1,11 @@
 """1日分のレースデータを取得 → CSV 保存
 
-Phase 1: 開催メタ + 出走表 + ライン情報のみ
-Phase 2 で予定: オッズ・結果・払戻
+Phase 1: 開催メタ + 出走表 + ライン情報
+Phase 2: 選手成績 (JSJ002) + 結果 + 払戻 (JSJ012、レース完了分のみ)
 
 使い方:
   python ingest_day.py YYYY-MM-DD placeCode
-  python ingest_day.py 2026-04-26 42      # 名古屋
+  python ingest_day.py 2026-04-25 42      # 名古屋
 """
 
 import sys
@@ -17,6 +17,9 @@ from src.parser import (
     parse_program_meta,
     parse_race_entries,
     parse_race_lines,
+    parse_race_stats,
+    parse_race_results,
+    parse_payouts,
 )
 from src.storage import append_row, append_rows, has_race_day
 
@@ -84,6 +87,36 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str) -> dic
     lines = parse_race_lines(place_code, race_date, pj0305)
     counts["entries"] = append_rows("race_entries.csv", entries)
     counts["lines"] = append_rows("race_lines.csv", lines)
+
+    # 3) 選手成績 (JSJ002, 1日分まとめて取得)
+    try:
+        jsj002 = client.get_race_stats(enc_para_r)
+        if jsj002.get("raceInfo"):
+            stats = parse_race_stats(place_code, race_date, jsj002)
+            counts["stats"] = append_rows("race_stats.csv", stats)
+    except Exception as e:
+        logger.error("  JSJ002 (race_stats) failed: %s", e)
+
+    # 4) 結果 + 払戻 (JSJ012, レース完了分のみ per-race)
+    finished_races = [r for r in program["races"] if r.get("race_end")]
+    if finished_races:
+        logger.info("  Fetching results for %d finished races", len(finished_races))
+        for race in finished_races:
+            r_no = race["race_no"]
+            r_enc = race["enc_para_r"]
+            if not r_enc:
+                continue
+            try:
+                jsj012 = client.get_race_result(r_enc)
+                if jsj012.get("resultCd") == 0:
+                    results = parse_race_results(place_code, race_date, r_no, jsj012)
+                    payouts = parse_payouts(place_code, race_date, r_no, jsj012)
+                    counts["results"] = counts.get("results", 0) + append_rows("race_results.csv", results)
+                    counts["payouts"] = counts.get("payouts", 0) + append_rows("payouts.csv", payouts)
+            except Exception as e:
+                logger.error("  JSJ012 R%d failed: %s", r_no, e)
+    else:
+        logger.info("  No finished races (skip results/payouts)")
 
     logger.info("=== Done: %s %s ===", race_date, venue)
     for name, count in sorted(counts.items()):

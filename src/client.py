@@ -163,3 +163,28 @@ class KeirinClient:
             referer="/pc/racelist",
         )
         return resp.text
+
+    # ─── JSJ JSON エンドポイント (per-race AJAX) ────────────
+
+    def _get_jsj(self, jsj_id: str, enc_para_r: str) -> Any:
+        """汎用 JSJ エンドポイント呼び出し (純JSON返却)。
+
+        Referer は /pc/racelive 配下を装う必要がある。
+        """
+        resp = self._get(
+            "/pc/json",
+            params={"type": jsj_id, "encp": enc_para_r},
+            referer=f"/pc/racelive?encp={enc_para_r}",
+        )
+        return resp.json()
+
+    def get_race_stats(self, enc_para_r: str) -> Any:
+        """JSJ002: 開催1日分の選手成績データ (raceInfo[12] を返す)。
+
+        どのレースの encParaR でも、その日の全12レース分の選手成績が返る。
+        """
+        return self._get_jsj("JSJ002", enc_para_r)
+
+    def get_race_result(self, enc_para_r: str) -> Any:
+        """JSJ012: 1レース分の着順 + 払戻金。"""
+        return self._get_jsj("JSJ012", enc_para_r)
