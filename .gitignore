@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Env / secrets
+.env
+.env.local
+*.pem
+
+# Data / logs
+data/
+*.db
+*.sqlite
+*.sqlite3
+logs/
+*.log
+
+# Investigation artifacts (HTML/JS dumps)
+*_raw.html
+*_sample.html
+samples/
+tmp/
+
+# Claude Code workspace (per-user)
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Build
+dist/
+build/
