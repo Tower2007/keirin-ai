@@ -44,6 +44,7 @@ CSV_SCHEMAS: dict[str, list[str]] = {
         "player_code", "player_name", "age", "prefecture",
         "sotugyouki", "kyuhan",
         "tyakusa", "agari", "kimarite", "bh", "in_line_jyuni",
+        "kojin_state", "tyaku_note",
         "tenki", "husoku",
     ],
     "payouts.csv": [

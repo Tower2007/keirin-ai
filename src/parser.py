@@ -212,14 +212,30 @@ def parse_race_stats(
 def parse_race_results(
     place_code: int, race_date: str, race_no: int, jsj012: dict,
 ) -> list[dict]:
-    """JSJ012 → race_results 行リスト (1レース分)。"""
+    """JSJ012 → race_results 行リスト (1レース分)。
+
+    失格・落車・棄権者は kojinStateItemSubData[0] に理由が入る:
+      kojinState 例: 「失格」「落車棄権」「失格」
+      tyakuNote  例: 「押圧」「斜行」 (失格理由の補足)
+    """
     rows = []
     for r in jsj012.get("tyakujyunItemSubData", []):
+        # 失格・落車情報の抽出 (最初のエントリを採用)
+        kojin_states = r.get("kojinStateItemSubData", [])
+        kojin_state = None
+        tyaku_note = None
+        for ks in kojin_states:
+            ks_val = _clean_str(ks.get("kojinState"))
+            if ks_val:
+                kojin_state = ks_val
+                tyaku_note = _clean_str(ks.get("tyakuNote"))
+                break
+
         rows.append({
             "race_date": race_date,
             "place_code": place_code,
             "race_no": race_no,
-            "tyaku": _clean_int(r.get("tyaku")),  # 着順
+            "tyaku": _clean_int(r.get("tyaku")),  # 着順 (失格時 NULL)
             "car_no": _clean_int(r.get("syaban")),
             "player_code": _clean_str(r.get("sensyuRegistNo")),
             "player_name": _clean_str(r.get("sensyuName")),
@@ -232,6 +248,8 @@ def parse_race_results(
             "kimarite": _clean_str(r.get("kimarite")),  # 決まり手
             "bh": _clean_str(r.get("BH")),  # B(バック取り)/H(ホーム取り)
             "in_line_jyuni": _clean_str(r.get("inLineJyuni")),
+            "kojin_state": kojin_state,  # 「失格」「落車棄権」等
+            "tyaku_note": tyaku_note,  # 「押圧」等の失格理由
             "tenki": _clean_str(jsj012.get("tenki")),  # 天気
             "husoku": _clean_str(jsj012.get("husoku")),  # 風速
         })
