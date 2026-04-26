@@ -73,14 +73,19 @@ bundle には main + data-snapshot ブランチが含まれている。
 **作業は main で行うが、初回のみ data-snapshot から CSV を取り出す**:
 
 ```cmd
-git checkout data-snapshot -- data/
+git checkout origin/data-snapshot -- data/
 ```
 
 これで `data/` 配下に作業用PCの 1か月分データ（2026-03-26 〜 2026-04-26）が展開される。
+取り出された data/ 配下は .gitignore 対象なので tracked にはならない（untracked のまま、main は綺麗）。
 
 ブランチ確認:
 ```cmd
 git branch -a
+# * main
+#   remotes/origin/HEAD -> origin/main
+#   remotes/origin/data-snapshot
+#   remotes/origin/main
 git log --oneline -5
 ```
 
