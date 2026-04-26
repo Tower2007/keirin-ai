@@ -16,12 +16,31 @@
 
 ```
 src/
-  client.py      # KeirinClient (cookie session, GET only)
-  parser.py      # HTML 内 jsonData 抽出 + flat dict 変換
-  storage.py     # CSV 読み書き (data/ 配下)
-smoke_test.py    # 1日分スモークテスト (HTML/JSON 保存)
-ingest_day.py    # 1日分データ取得 → CSV 保存
-data/            # CSV + スモーク (.gitignore)
+  client.py             # KeirinClient (cookie session, GET only)
+  parser.py             # HTML 内 jsonData 抽出 + flat dict 変換
+  storage.py            # CSV 読み書き (data/ 配下)
+smoke_test.py           # 1日分スモークテスト (HTML/JSON 保存)
+ingest_day.py           # 1日分データ取得 → CSV 保存 (差分対応)
+ingest_today_lines.py   # 当日全場のライン取得 (cron 朝実行用)
+backfill.py             # 過去データ一括取得
+data/                   # CSV + スモーク (.gitignore)
+```
+
+## 運用フロー
+
+ingest_day.py は **差分取り込み** に対応しているため、同じ venue-day を複数回呼べる:
+
+| タイミング | スクリプト | 取得されるもの |
+|---|---|---|
+| 朝 7:00 (cron) | `ingest_today_lines.py` | 当日開催の全場の meta/entries/**lines**/stats |
+| 翌朝 5:00 (cron) | `ingest_day.py YESTERDAY VENUE` を全場ループ | results/payouts のみ追加 |
+
+**必ず朝に lines を取得**: PJ0305 の nInfo は完了後に空になるため。
+
+### Windows タスクスケジューラ登録例
+```cmd
+schtasks /create /tn "keirin-ai-lines" /sc daily /st 07:00 ^
+  /tr "python C:\Users\user\Claude-Project\keirin-ai\ingest_today_lines.py"
 ```
 
 ## CSV ファイル構成 (data/)

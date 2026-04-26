@@ -31,19 +31,35 @@ logger = logging.getLogger(__name__)
 
 
 def ingest_one_day(client: KeirinClient, place_code: int, race_date: str) -> dict:
-    """1日分のデータを取得して CSV に保存。戻り値は投入行数サマリー。"""
+    """1日分のデータを取得して CSV に保存（差分取り込み対応）。
 
-    # 重複チェック (race_meta.csv をキーに)
-    if has_race_day("race_meta.csv", place_code, race_date):
-        logger.warning("Already ingested: %s place=%d, skipping", race_date, place_code)
+    既に CSV に存在するセクションはスキップし、欠けている部分のみ取得する。
+    これにより、朝に lines/entries/stats を取り、夕方に同じ venue-day を
+    再実行して結果+払戻だけを追加することが可能。
+
+    戻り値: 各 CSV に追記した行数の dict (skipped=True なら全部既存)。
+    """
+
+    # 各セクションの存在状況
+    has_meta = has_race_day("race_meta.csv", place_code, race_date)
+    has_entries = has_race_day("race_entries.csv", place_code, race_date)
+    has_lines = has_race_day("race_lines.csv", place_code, race_date)
+    has_stats = has_race_day("race_stats.csv", place_code, race_date)
+    has_results = has_race_day("race_results.csv", place_code, race_date)
+
+    # 全部揃っていればスキップ
+    if has_meta and has_entries and has_lines and has_stats and has_results:
+        logger.info("Already complete: %s place=%d, skipping", race_date, place_code)
         return {"skipped": True}
 
     venue = VENUE_CODES.get(place_code, f"code{place_code}")
     logger.info("=== Ingest: %s %s (%d) ===", race_date, venue, place_code)
+    logger.info("  Existing: meta=%s entries=%s lines=%s stats=%s results=%s",
+                has_meta, has_entries, has_lines, has_stats, has_results)
 
     counts: dict[str, int] = {}
 
-    # 1) 開催プログラム取得 — 失敗時は呼び出し元へ再送（バックフィルで再試行させる）
+    # 1) 開催プログラム取得 (encParaR を得るため毎回必要)
     prog_html = client.get_raceprogram_html(place_code, race_date)
 
     pc0201 = extract_json_data(prog_html, "PC0201")
@@ -56,58 +72,65 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str) -> dic
         logger.info("  No races available")
         return counts
 
-    counts["meta"] = append_row("race_meta.csv", program["meta"])
-    logger.info("  Meta: %s / grade=%s / %d races",
-                program["meta"]["place_name"],
-                program["meta"]["grade"],
-                len(program["races"]))
+    if not has_meta:
+        counts["meta"] = append_row("race_meta.csv", program["meta"])
+        logger.info("  Meta: %s / grade=%s / %d races",
+                    program["meta"]["place_name"],
+                    program["meta"]["grade"],
+                    len(program["races"]))
 
-    # 2) 出走表一覧 (1ページで全12R分が取れる) — 失敗時は再送
     enc_para_r = program["races"][0]["enc_para_r"]
     if not enc_para_r:
         raise RuntimeError(f"encParaR not found for {race_date} venue={place_code}")
 
-    racelist_html = client.get_racelist_html(enc_para_r)
+    # 2) 出走表 + ライン (entries か lines のどちらか欠けていれば取得)
+    if not has_entries or not has_lines:
+        racelist_html = client.get_racelist_html(enc_para_r)
+        pj0305 = extract_json_data(racelist_html, "PJ0305")
+        if not pj0305:
+            raise RuntimeError(f"PJ0305 not found for {race_date} venue={place_code}")
 
-    pj0305 = extract_json_data(racelist_html, "PJ0305")
-    if not pj0305:
-        logger.error("  PJ0305 not found in racelist HTML")
-        return counts
+        if not has_entries:
+            entries = parse_race_entries(place_code, race_date, pj0305)
+            counts["entries"] = append_rows("race_entries.csv", entries)
+        if not has_lines:
+            lines = parse_race_lines(place_code, race_date, pj0305)
+            counts["lines"] = append_rows("race_lines.csv", lines)
+            if not lines:
+                logger.warning("  Lines empty (race already finished?): %s %d",
+                               race_date, place_code)
 
-    entries = parse_race_entries(place_code, race_date, pj0305)
-    lines = parse_race_lines(place_code, race_date, pj0305)
-    counts["entries"] = append_rows("race_entries.csv", entries)
-    counts["lines"] = append_rows("race_lines.csv", lines)
-
-    # 3) 選手成績 (JSJ002, 1日分まとめて取得)
-    try:
-        jsj002 = client.get_race_stats(enc_para_r)
-        if jsj002.get("raceInfo"):
-            stats = parse_race_stats(place_code, race_date, jsj002)
-            counts["stats"] = append_rows("race_stats.csv", stats)
-    except Exception as e:
-        logger.error("  JSJ002 (race_stats) failed: %s", e)
+    # 3) 選手成績 (JSJ002)
+    if not has_stats:
+        try:
+            jsj002 = client.get_race_stats(enc_para_r)
+            if jsj002.get("raceInfo"):
+                stats = parse_race_stats(place_code, race_date, jsj002)
+                counts["stats"] = append_rows("race_stats.csv", stats)
+        except Exception as e:
+            logger.error("  JSJ002 (race_stats) failed: %s", e)
 
     # 4) 結果 + 払戻 (JSJ012, レース完了分のみ per-race)
-    finished_races = [r for r in program["races"] if r.get("race_end")]
-    if finished_races:
-        logger.info("  Fetching results for %d finished races", len(finished_races))
-        for race in finished_races:
-            r_no = race["race_no"]
-            r_enc = race["enc_para_r"]
-            if not r_enc:
-                continue
-            try:
-                jsj012 = client.get_race_result(r_enc)
-                if jsj012.get("resultCd") == 0:
-                    results = parse_race_results(place_code, race_date, r_no, jsj012)
-                    payouts = parse_payouts(place_code, race_date, r_no, jsj012)
-                    counts["results"] = counts.get("results", 0) + append_rows("race_results.csv", results)
-                    counts["payouts"] = counts.get("payouts", 0) + append_rows("payouts.csv", payouts)
-            except Exception as e:
-                logger.error("  JSJ012 R%d failed: %s", r_no, e)
-    else:
-        logger.info("  No finished races (skip results/payouts)")
+    if not has_results:
+        finished_races = [r for r in program["races"] if r.get("race_end")]
+        if finished_races:
+            logger.info("  Fetching results for %d finished races", len(finished_races))
+            for race in finished_races:
+                r_no = race["race_no"]
+                r_enc = race["enc_para_r"]
+                if not r_enc:
+                    continue
+                try:
+                    jsj012 = client.get_race_result(r_enc)
+                    if jsj012.get("resultCd") == 0:
+                        results = parse_race_results(place_code, race_date, r_no, jsj012)
+                        payouts = parse_payouts(place_code, race_date, r_no, jsj012)
+                        counts["results"] = counts.get("results", 0) + append_rows("race_results.csv", results)
+                        counts["payouts"] = counts.get("payouts", 0) + append_rows("payouts.csv", payouts)
+                except Exception as e:
+                    logger.error("  JSJ012 R%d failed: %s", r_no, e)
+        else:
+            logger.info("  No finished races (skip results/payouts)")
 
     logger.info("=== Done: %s %s ===", race_date, venue)
     for name, count in sorted(counts.items()):
