@@ -135,6 +135,11 @@ def main() -> None:
                 except Exception as e:
                     logger.error("FAILED %s venue=%d: %s", ds, pc, e)
                     stats["errors"] += 1
+                    # セッション再初期化 (broken cookie / DNS復帰後対策)
+                    try:
+                        client.reset_session()
+                    except Exception:
+                        pass
                     # エラー時は mark_done しない -> 再実行時にリトライ
 
             # 日ごと進捗表示

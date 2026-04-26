@@ -43,12 +43,8 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str) -> dic
 
     counts: dict[str, int] = {}
 
-    # 1) 開催プログラム取得
-    try:
-        prog_html = client.get_raceprogram_html(place_code, race_date)
-    except Exception as e:
-        logger.error("raceprogram fetch failed: %s", e)
-        return counts
+    # 1) 開催プログラム取得 — 失敗時は呼び出し元へ再送（バックフィルで再試行させる）
+    prog_html = client.get_raceprogram_html(place_code, race_date)
 
     pc0201 = extract_json_data(prog_html, "PC0201")
     if not pc0201 or not pc0201.get("C0201data"):
@@ -66,17 +62,12 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str) -> dic
                 program["meta"]["grade"],
                 len(program["races"]))
 
-    # 2) 出走表一覧 (1ページで全12R分が取れる)
+    # 2) 出走表一覧 (1ページで全12R分が取れる) — 失敗時は再送
     enc_para_r = program["races"][0]["enc_para_r"]
     if not enc_para_r:
-        logger.error("  encParaR not found, cannot fetch racelist")
-        return counts
+        raise RuntimeError(f"encParaR not found for {race_date} venue={place_code}")
 
-    try:
-        racelist_html = client.get_racelist_html(enc_para_r)
-    except Exception as e:
-        logger.error("racelist fetch failed: %s", e)
-        return counts
+    racelist_html = client.get_racelist_html(enc_para_r)
 
     pj0305 = extract_json_data(racelist_html, "PJ0305")
     if not pj0305:

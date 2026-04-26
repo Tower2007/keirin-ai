@@ -103,6 +103,15 @@ class KeirinClient:
         resp.raise_for_status()
         self._session_initialized = True
 
+    def reset_session(self) -> None:
+        """セッション破棄 → 次の呼び出しで再 bootstrap。
+
+        ネットワーク障害後 / Cookie 失効時に呼ぶ。
+        """
+        logger.warning("Resetting session (cookies cleared)")
+        self._session.cookies.clear()
+        self._session_initialized = False
+
     def _get(self, path: str, params: dict | None = None,
              referer: str | None = None) -> requests.Response:
         self._ensure_session()
