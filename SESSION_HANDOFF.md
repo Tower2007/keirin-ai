@@ -48,20 +48,41 @@
 
 ---
 
-## 2. 別PCのセットアップ手順
+## 2. 別PCのセットアップ手順（ゼロから）
 
-### 2.1 リポジトリ取得
+### 2.0 前提（別PC）
 
-```bash
-# git push 済みの場合
-git clone <repo-url> C:\path\to\keirin-ai
-cd C:\path\to\keirin-ai
+- Windows 10 / 11
+- Python 3.13 インストール済（python.org or Microsoft Store）
+- Git for Windows インストール済
+- ブラウザで GitHub にログイン可能（tower2007 アカウント）
 
-# 既に clone 済みなら最新化
-git pull
+### 2.1 作業フォルダ作成 + bundle から clone
+
+転送用ファイル: `keirin-ai.bundle`（作業用PCの Desktop で生成、USB / OneDrive 等で持ち込み）
+
+```cmd
+mkdir C:\Users\<username>\Claude-Project
+cd C:\Users\<username>\Claude-Project
+git clone C:\path\to\keirin-ai.bundle keirin-ai
+cd keirin-ai
+git remote remove origin
 ```
 
-最新コミット: `a990aa5`（2026-04-26）
+bundle には main + data-snapshot ブランチが含まれている。
+**作業は main で行うが、初回のみ data-snapshot から CSV を取り出す**:
+
+```cmd
+git checkout data-snapshot -- data/
+```
+
+これで `data/` 配下に作業用PCの 1か月分データ（2026-03-26 〜 2026-04-26）が展開される。
+
+ブランチ確認:
+```cmd
+git branch -a
+git log --oneline -5
+```
 
 ### 2.2 依存関係インストール
 
