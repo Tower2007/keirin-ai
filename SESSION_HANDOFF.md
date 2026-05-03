@@ -61,9 +61,31 @@
 
 1. **`no_entries` 42 venue-day の再 ingest**（`ingest_day.py` のスキップ条件修正後に再実行）
 2. **ML 試作**: `race_quality.csv` で `status='normal'` フィルタ + LightGBM ベースライン
-3. **日次 cron の安定運用**: ライン蓄積を 1か月以上継続
+3. ✅ **日次 cron の安定運用**: 2026-05-04 セットアップ完了（下記参照）
 4. **Phase 3**: 第三者サイトからの事前オッズ取得検討
 5. **Phase 5**: Supabase 移行（CSV が 350MB 超え、検索が重くなってきた）
+
+### 日次 cron セットアップ済 (2026-05-04 / このPC)
+
+| タスク名 | 実行時刻 | スクリプト | 用途 |
+|---|---|---|---|
+| keirin-ai-lines   | 07:00 | scripts/cron_lines.bat   | 当日の全開催場の lines/entries/stats |
+| keirin-ai-results | 05:00 | scripts/cron_results.bat | 昨日の全43場の results/payouts 回収 |
+
+ログ出力先: `logs/cron_{lines,results}_YYYY-MM-DD.log`
+
+⚠️ **注意点**:
+- Logon Mode = "Interactive only" → ユーザーがログオンしている時のみ実行される。
+  - 出張等で長期 PC を離れる場合は、自動ログオン or sleep 無効化 を別途検討
+- ノートPCで蓋を閉じると suspend → タスクがスキップされる。AC 給電中の動作モードを「スリープしない」に設定推奨
+- 失敗通知は未設定（`.env.example` に Gmail SMTP 枠だけ存在）。週次で `logs/` を目視確認するか、後日通知を実装
+
+確認コマンド:
+```cmd
+schtasks /query /tn "keirin-ai-*"
+schtasks /run /tn "keirin-ai-lines"      # 即時実行（手動テスト）
+schtasks /delete /tn "keirin-ai-lines" /f # 削除
+```
 
 ---
 
