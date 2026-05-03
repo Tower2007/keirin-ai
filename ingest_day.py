@@ -10,6 +10,7 @@ Phase 2: 選手成績 (JSJ002) + 結果 + 払戻 (JSJ012、レース完了分の
 
 import sys
 import logging
+from datetime import date as _date
 
 from src.client import KeirinClient, VENUE_CODES
 from src.parser import (
@@ -58,8 +59,11 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str,
         has_stats = has_race_day("race_stats.csv", place_code, race_date)
         has_results = has_race_day("race_results.csv", place_code, race_date)
 
-    # 全部揃っていればスキップ
-    if has_meta and has_entries and has_lines and has_stats and has_results:
+    # 全部揃っていればスキップ。
+    # past date は lines (PJ0305 nInfo) が取得不能なので、lines を必須から外す。
+    is_past = race_date < _date.today().isoformat()
+    lines_ok = has_lines or is_past
+    if has_meta and has_entries and lines_ok and has_stats and has_results:
         logger.info("Already complete: %s place=%d, skipping", race_date, place_code)
         return {"skipped": True}
 
