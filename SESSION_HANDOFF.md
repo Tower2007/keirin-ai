@@ -1,12 +1,73 @@
 # keirin-ai 引き継ぎ資料
 
-**作成日**: 2026-04-26  
-**作成元PC**: 作業用PC（このPC）  
-**引き継ぎ先**: バックフィル用PC（別PC）
+**初回作成日**: 2026-04-26  
+**最終更新日**: 2026-05-04（バックフィル完了後の継続セッション用に追記）
 
 ---
 
-## TL;DR (今すぐやること)
+## 2026-05-04 更新版 TL;DR（別PCで作業継続する場合）
+
+1. **コード**: 別PC で `git pull origin main`（GitHub から）
+2. **データ**: 最新 bundle (`keirin-ai-data-YYYYMMDD.bundle`) を OneDrive/USB で持参
+   ```cmd
+   git fetch C:\path\to\keirin-ai-data-YYYYMMDD.bundle data-snapshot:data-snapshot
+   git checkout data-snapshot -- data/
+   ```
+3. 別PC で `pip install -r requirements.txt`（pandas 追加済み）
+4. `python build_race_quality.py` で品質サマリ再生成（任意）
+5. 翌朝以降の継続: `ingest_today_lines.py` (朝7時) + `ingest_day.py` ループ (翌朝5時) を Windows タスクスケジューラ登録
+
+**初回セットアップ（別PCにレポジトリも無い）の場合**: 下の「2. 別PCのセットアップ手順」参照。
+
+---
+
+## 2026-05-04 現状サマリ
+
+### バックフィル完了
+- 範囲: 2021-04-26 〜 2026-04-25（5年分）
+- 経過時間: 7時間36分（約45時間想定 → 短縮 — Cloudflare 対策不要だった）
+- errors=0, ingested=1,678 venue-day
+- 累積データ: 13,430 venue-day / 137,176 race / 966,199 entries 行
+
+### 新規追加
+- `build_race_quality.py` + `data/race_quality.csv`: venue-day 単位の完了率/欠損サマリ
+  - status 内訳: normal 13,285 / partial_canceled 92 / no_entries 42 / payout_missing 7 / all_canceled 4
+
+### 現状の懸念点（次セッションで対応候補）
+
+#### 🟡 懸念 1: `no_entries` 42 venue-day の anomaly
+- `race_meta.csv` には記録があるが `race_entries.csv` に行が無い venue-day が 42件
+- うち 17件は JSJ012 の placeholder 行のみ `race_results.csv` に残存（tyaku/kimarite 全 NaN）
+- 原因仮説: ingest_day 実行時に PJ0305 取得が失敗したまま meta だけ書き込まれた
+- 対応案: `ingest_day.py` のスキップ条件を「meta + entries 両方あれば skip」に変更し、該当 venue-day を再 ingest
+- 影響: ML 学習データの欠損 0.31%。`status='normal'` でフィルタすれば実害無し
+
+#### 🟡 懸念 2: `partial_canceled` 92 venue-day（実世界要因）
+- 雪・台風・落車等で当日途中打切りの venue-day
+- 集中日: 2023-01-24 (10R欠), 2025-02-07 (10R欠), 2025-01-21 (9R欠), 2021-10-01 (8R欠)
+- これは仕様通りで対応不要だが、ML 学習時は天候特徴量として使うか除外検討
+
+#### 🟡 懸念 3: ライン情報 (race_lines.csv) は 4/26 分のみ
+- PJ0305 nInfo はレース完了後に空配列のため過去取得不可（仕様）
+- 対応: 別PC で `ingest_today_lines.py` を朝7時 cron で確実に動かす
+- 現状 race_lines.csv は ~330行（4/26 の1日分のみ）
+
+#### 🟢 懸念無し（確認済）
+- 主キー重複: 全 CSV で 0
+- entries ↔ stats: 完全一致 (137,176 races / 966,199 rows)
+- meta ↔ entries 整合性: 13,430 venue-day で完全一致
+
+### 次回セッションでやりたいこと（優先度順）
+
+1. **`no_entries` 42 venue-day の再 ingest**（`ingest_day.py` のスキップ条件修正後に再実行）
+2. **ML 試作**: `race_quality.csv` で `status='normal'` フィルタ + LightGBM ベースライン
+3. **日次 cron の安定運用**: ライン蓄積を 1か月以上継続
+4. **Phase 3**: 第三者サイトからの事前オッズ取得検討
+5. **Phase 5**: Supabase 移行（CSV が 350MB 超え、検索が重くなってきた）
+
+---
+
+## 旧 TL;DR (2026-04-26 版、初回セットアップ用)
 
 1. このPC で `git push`、別PC で `git clone` or `git pull`
 2. 別PC で `.env` 作成、`pip install -r requirements.txt`
