@@ -1,15 +1,60 @@
 """CSV ファイル読み書きモジュール
 
 data/ 配下に CSV を蓄積。ヘッダ自動付与、追記モード。
+backfill と ingest_today_lines (cron) の並列実行に備え、書き込み時は
+.lock ファイル経由で排他ロックを取る。
 """
 
 import csv
 import logging
+import sys
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path("data")
+
+
+if sys.platform == "win32":
+    import msvcrt
+
+    def _acquire(fd: int) -> None:
+        while True:
+            try:
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                return
+            except OSError:
+                time.sleep(0.1)
+
+    def _release(fd: int) -> None:
+        try:
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+
+else:
+    import fcntl
+
+    def _acquire(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+    def _release(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextmanager
+def _file_lock(path: Path):
+    """CSV ごとの排他ロック。隣接する .lock ファイルを介して取得する。"""
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+") as lf:
+        _acquire(lf.fileno())
+        try:
+            yield
+        finally:
+            _release(lf.fileno())
 
 # CSV ファイル名 → カラム定義
 CSV_SCHEMAS: dict[str, list[str]] = {
@@ -75,11 +120,12 @@ def append_rows(csv_name: str, rows: list[dict]) -> int:
 
     columns = CSV_SCHEMAS[csv_name]
     path = DATA_DIR / csv_name
-    _ensure_header(path, columns)
 
-    with open(path, "a", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
-        writer.writerows(rows)
+    with _file_lock(path):
+        _ensure_header(path, columns)
+        with open(path, "a", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
+            writer.writerows(rows)
 
     logger.debug("Appended %d rows to %s", len(rows), path)
     return len(rows)
@@ -109,7 +155,11 @@ def row_count(csv_name: str) -> int:
 
 
 def has_race_day(csv_name: str, place_code: int, race_date: str) -> bool:
-    """指定 race-day が既に CSV に存在するか（重複投入防止）。"""
+    """指定 race-day が既に CSV に存在するか（重複投入防止）。
+
+    バックフィルなど多数の venue-day を処理する場合は、毎回 CSV をフルスキャン
+    すると O(N) × 件数で激重になる。`RaceDayIndex` を使うことで O(1) になる。
+    """
     path = DATA_DIR / csv_name
     if not path.exists():
         return False
@@ -119,3 +169,52 @@ def has_race_day(csv_name: str, place_code: int, race_date: str) -> bool:
             if row.get("place_code") == str(place_code) and row.get("race_date") == race_date:
                 return True
     return False
+
+
+class RaceDayIndex:
+    """5 つの CSV それぞれの (race_date, place_code) を起動時に set へ展開し、
+    存在チェックを O(1) にするためのインメモリインデックス。
+
+    バックフィル等の長時間ジョブで使う。書き込み後は `mark()` で同期する。
+    """
+
+    CSV_NAMES = (
+        "race_meta.csv",
+        "race_entries.csv",
+        "race_lines.csv",
+        "race_stats.csv",
+        "race_results.csv",
+    )
+
+    def __init__(self) -> None:
+        self._sets: dict[str, set[tuple[str, int]]] = {
+            name: self._load(name) for name in self.CSV_NAMES
+        }
+
+    @staticmethod
+    def _load(csv_name: str) -> set[tuple[str, int]]:
+        path = DATA_DIR / csv_name
+        if not path.exists():
+            return set()
+        result: set[tuple[str, int]] = set()
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                pc = row.get("place_code")
+                rd = row.get("race_date")
+                if not pc or not rd:
+                    continue
+                try:
+                    result.add((rd, int(pc)))
+                except ValueError:
+                    continue
+        return result
+
+    def has(self, csv_name: str, place_code: int, race_date: str) -> bool:
+        return (race_date, place_code) in self._sets.get(csv_name, set())
+
+    def mark(self, csv_name: str, place_code: int, race_date: str) -> None:
+        self._sets.setdefault(csv_name, set()).add((race_date, place_code))
+
+    def sizes(self) -> dict[str, int]:
+        return {name: len(s) for name, s in self._sets.items()}

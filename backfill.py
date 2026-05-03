@@ -17,6 +17,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from src.client import KeirinClient, VENUE_CODES
+from src.storage import RaceDayIndex
 from ingest_day import ingest_one_day
 
 logging.basicConfig(
@@ -86,6 +87,10 @@ def main() -> None:
     done = load_done()
     logger.info("  Already done: %d", len(done))
 
+    logger.info("  Building in-memory index from CSVs ...")
+    index = RaceDayIndex()
+    logger.info("  Index sizes: %s", index.sizes())
+
     client = KeirinClient()
 
     stats = {
@@ -110,7 +115,7 @@ def main() -> None:
                     continue
 
                 try:
-                    counts = ingest_one_day(client, pc, ds)
+                    counts = ingest_one_day(client, pc, ds, index=index)
 
                     if counts.get("skipped"):
                         # has_race_day duplicate check

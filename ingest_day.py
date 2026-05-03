@@ -21,7 +21,7 @@ from src.parser import (
     parse_race_results,
     parse_payouts,
 )
-from src.storage import append_row, append_rows, has_race_day
+from src.storage import append_row, append_rows, has_race_day, RaceDayIndex
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,22 +30,33 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def ingest_one_day(client: KeirinClient, place_code: int, race_date: str) -> dict:
+def ingest_one_day(client: KeirinClient, place_code: int, race_date: str,
+                   index: RaceDayIndex | None = None) -> dict:
     """1日分のデータを取得して CSV に保存（差分取り込み対応）。
 
     既に CSV に存在するセクションはスキップし、欠けている部分のみ取得する。
     これにより、朝に lines/entries/stats を取り、夕方に同じ venue-day を
     再実行して結果+払戻だけを追加することが可能。
 
+    `index` を渡すと存在チェックは O(1) のメモリ参照になり、書き込み後は
+    自動で index を更新する。バックフィル等の連続呼び出しで利用。
+
     戻り値: 各 CSV に追記した行数の dict (skipped=True なら全部既存)。
     """
 
     # 各セクションの存在状況
-    has_meta = has_race_day("race_meta.csv", place_code, race_date)
-    has_entries = has_race_day("race_entries.csv", place_code, race_date)
-    has_lines = has_race_day("race_lines.csv", place_code, race_date)
-    has_stats = has_race_day("race_stats.csv", place_code, race_date)
-    has_results = has_race_day("race_results.csv", place_code, race_date)
+    if index is not None:
+        has_meta = index.has("race_meta.csv", place_code, race_date)
+        has_entries = index.has("race_entries.csv", place_code, race_date)
+        has_lines = index.has("race_lines.csv", place_code, race_date)
+        has_stats = index.has("race_stats.csv", place_code, race_date)
+        has_results = index.has("race_results.csv", place_code, race_date)
+    else:
+        has_meta = has_race_day("race_meta.csv", place_code, race_date)
+        has_entries = has_race_day("race_entries.csv", place_code, race_date)
+        has_lines = has_race_day("race_lines.csv", place_code, race_date)
+        has_stats = has_race_day("race_stats.csv", place_code, race_date)
+        has_results = has_race_day("race_results.csv", place_code, race_date)
 
     # 全部揃っていればスキップ
     if has_meta and has_entries and has_lines and has_stats and has_results:
@@ -74,6 +85,8 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str) -> dic
 
     if not has_meta:
         counts["meta"] = append_row("race_meta.csv", program["meta"])
+        if index is not None:
+            index.mark("race_meta.csv", place_code, race_date)
         logger.info("  Meta: %s / grade=%s / %d races",
                     program["meta"]["place_name"],
                     program["meta"]["grade"],
@@ -93,9 +106,13 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str) -> dic
         if not has_entries:
             entries = parse_race_entries(place_code, race_date, pj0305)
             counts["entries"] = append_rows("race_entries.csv", entries)
+            if index is not None and entries:
+                index.mark("race_entries.csv", place_code, race_date)
         if not has_lines:
             lines = parse_race_lines(place_code, race_date, pj0305)
             counts["lines"] = append_rows("race_lines.csv", lines)
+            if index is not None and lines:
+                index.mark("race_lines.csv", place_code, race_date)
             if not lines:
                 logger.warning("  Lines empty (race already finished?): %s %d",
                                race_date, place_code)
@@ -107,6 +124,8 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str) -> dic
             if jsj002.get("raceInfo"):
                 stats = parse_race_stats(place_code, race_date, jsj002)
                 counts["stats"] = append_rows("race_stats.csv", stats)
+                if index is not None and stats:
+                    index.mark("race_stats.csv", place_code, race_date)
         except Exception as e:
             logger.error("  JSJ002 (race_stats) failed: %s", e)
 
@@ -115,6 +134,7 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str) -> dic
         finished_races = [r for r in program["races"] if r.get("race_end")]
         if finished_races:
             logger.info("  Fetching results for %d finished races", len(finished_races))
+            results_added = 0
             for race in finished_races:
                 r_no = race["race_no"]
                 r_enc = race["enc_para_r"]
@@ -125,10 +145,14 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str) -> dic
                     if jsj012.get("resultCd") == 0:
                         results = parse_race_results(place_code, race_date, r_no, jsj012)
                         payouts = parse_payouts(place_code, race_date, r_no, jsj012)
-                        counts["results"] = counts.get("results", 0) + append_rows("race_results.csv", results)
+                        n_res = append_rows("race_results.csv", results)
+                        counts["results"] = counts.get("results", 0) + n_res
                         counts["payouts"] = counts.get("payouts", 0) + append_rows("payouts.csv", payouts)
+                        results_added += n_res
                 except Exception as e:
                     logger.error("  JSJ012 R%d failed: %s", r_no, e)
+            if index is not None and results_added > 0:
+                index.mark("race_results.csv", place_code, race_date)
         else:
             logger.info("  No finished races (skip results/payouts)")
 
