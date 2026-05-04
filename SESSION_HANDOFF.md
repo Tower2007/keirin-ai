@@ -1,11 +1,58 @@
 # keirin-ai 引き継ぎ資料
 
 **初回作成日**: 2026-04-26  
-**最終更新日**: 2026-05-04（ML ベースライン完了後 — バックフィルPC帰着セッション）
+**最終更新日**: 2026-05-04（Phase 3 オッズ取得実装完了）
 
 ---
 
-## 2026-05-04 後半セッション (このPC帰着 → クリーニング + ML 試作)
+## 自宅PC 向けタスク (2026-05-04): netkeirin オッズ 5年バックフィル
+
+### 手順
+
+```cmd
+cd C:\Users\user\Claude-Project\keirin-ai
+git pull origin main
+
+REM (任意) 既存 race_meta.csv に is_canceled 列を追加
+REM ※ 自宅PC 側で ingest_day.py を再開する場合のみ必要。
+REM ※ backfill_odds.py だけ走らせる場合は不要。
+python -c "import pandas as pd; df = pd.read_csv('data/race_meta.csv'); df['is_canceled'] = df.get('is_canceled', False) if 'is_canceled' in df.columns else False; df.to_csv('data/race_meta.csv', index=False); print('OK')"
+
+REM オッズ 5年バックフィル開始 (バックグラウンド推奨)
+python backfill_odds.py 2021-01-01 2026-12-31 > backfill_odds.log 2>&1
+```
+
+### ETA
+
+- 対象: status=normal の **13,285 venue-day** (race_quality.csv から自動抽出)
+- 1 venue-day あたり 12レース × 0.8秒 + parse ≒ 13秒
+- **合計約 48 時間**（短縮されれば 36 時間程度）
+- 途中中断 OK: `data/backfill_odds_done.txt` で再開可能
+
+### 進捗確認
+
+```cmd
+wc -l data\backfill_odds_done.txt
+type data\backfill_odds_stats.json
+tail -50 data\backfill_odds.log
+```
+
+### 完了後
+
+成果物 `data/race_odds.csv` を bundle で受領:
+```cmd
+git bundle create %USERPROFILE%\OneDrive\keirin-ai-data-YYYYMMDD.bundle data-snapshot
+```
+
+### 注意点
+
+- ノートPCなら **スリープ無効化必須** (電源オプション → 「PCをスリープしない」)
+- ネットワーク切断時は urllib3 Retry が自動再試行 (最大5回)。それでも fail なら `data/backfill_odds.log` 確認
+- 期待行数: ~5,000 万行 (×7券種、1レース平均 600〜800行)
+
+---
+
+## 2026-05-04 後半セッション (このPC帰着 → クリーニング + ML + Phase 3)
 
 このセッションでやったこと:
 
@@ -19,6 +66,12 @@
    - `ml_baseline.py`: 4 ターゲット (P(win)/P(top2)/P(top3)/rank) + 5 券種バックテスト
    - `ml_ev_backtest.py`: 校正→評価による疑似 EV 検証
 6. ✅ **race_quality.csv 再生成**: status `canceled` ステータス追加、no_entries 0件に
+7. ✅ **Phase 3: netkeirin オッズ取得実装** (commit `2a3cbc5`):
+   - `src/netkeirin_client.py`: AplRaceOdds API クライアント (POST `/api/race/`)
+   - `src/netkeirin_parser.py`: list_3..list_9 → 7券種 (WH2/WT2/SH2/ST2/W/RH3/RT3) 変換
+   - `ingest_odds.py` + `backfill_odds.py`
+   - 検証: 2026-04-26 名古屋 R8 で実払戻と完全一致 (差 0.0%)
+   - 2021-04〜2026-04 全期間で OK 確認済 → 5年バックフィル可能
 
 ### ML ベースライン主要数値
 
@@ -47,11 +100,12 @@
 
 ### 次回セッションでやりたいこと (2026-05-04 後半時点)
 
-1. **Phase 3 着手**: 事前オッズ取得 (netkeirin or keirin.jp ログイン)。これが決定打
-2. **特徴量強化**: 過去N走ローリング、対戦相手特性 (進捗をブースト)
-3. **戦略複合**: 各券種の最良 confidence ビンを使い分けるミックス戦略 (二車単=中確信、三連複=低確信)
-4. **Phase 5**: Supabase 移行 (CSV 350MB 超え)
-5. **特徴量モデルの保存** (毎回 12分の再学習を避ける)
+1. ✅ **Phase 3 オッズ取得コード**: 実装済 (commit `2a3cbc5`) → 自宅PCでバックフィル実行 (上の手順参照)
+2. **オッズ取得後の収益検証**: race_odds.csv が揃ったら、本物の EV ベース戦略で ROI を再検証
+3. **特徴量強化**: 過去N走ローリング、対戦相手特性 (予測精度をブースト)
+4. **戦略複合**: 各券種の最良 confidence ビンを使い分けるミックス戦略 (二車単=中確信、三連複=低確信)
+5. **Phase 5**: Supabase 移行 (CSV 400MB 超え予定)
+6. **特徴量モデルの保存** (毎回 12分の再学習を避ける)
 
 ### 出力データ・成果物
 
