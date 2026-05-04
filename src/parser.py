@@ -87,6 +87,8 @@ def parse_program_meta(
         "sel_kaisai": _clean_str(data.get("selKaisai")),  # YYYYMMDD
         "enc_para_k": _clean_str(data.get("encSelParaK")),
         "enc_para_s": _clean_str(data.get("encParaS")),
+        # 中止 / 順延 / 打切 (実レース無し)。flgRaceCancel + cntRace=0 が公式キャンセル。
+        "is_canceled": bool(data.get("flgRaceCancel")) and not data.get("cntRace"),
     }
     races = []
     for idx, race in enumerate(data.get("C0201race", []), start=1):

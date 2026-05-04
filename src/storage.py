@@ -61,6 +61,7 @@ CSV_SCHEMAS: dict[str, list[str]] = {
     "race_meta.csv": [
         "race_date", "place_code", "place_name", "race_name", "grade",
         "sel_kaisai", "enc_para_k", "enc_para_s",
+        "is_canceled",
     ],
     "race_entries.csv": [
         "race_date", "place_code", "race_no", "car_no",

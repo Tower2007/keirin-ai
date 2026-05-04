@@ -83,6 +83,20 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str,
         return counts
 
     program = parse_program_meta(place_code, race_date, pc0201)
+
+    # 公式キャンセル日 (中止/順延/打切) は entries/results が存在しないので
+    # meta に is_canceled=True で記録して return。再 ingest 時の冪等性を保つ。
+    if program["meta"]["is_canceled"]:
+        if not has_meta:
+            counts["meta"] = append_row("race_meta.csv", program["meta"])
+            if index is not None:
+                index.mark("race_meta.csv", place_code, race_date)
+            logger.info("  Canceled day: %s / %s -- meta written (is_canceled=True)",
+                        program["meta"]["place_name"], program["meta"]["race_name"])
+        else:
+            logger.info("  Canceled day (already in meta): %s", race_date)
+        return counts
+
     if not program["races"]:
         logger.info("  No races available")
         return counts

@@ -14,7 +14,8 @@ data/race_quality.csv を出力する。ML 学習時に欠損日や中止日を�
   n_missing_payouts : n_planned - n_payouts
   completion_ratio  : n_payouts / n_planned
   status            : normal / partial_canceled / all_canceled / payout_missing
-                      / no_entries (entries 欠落の anomaly)
+                      / canceled (中止/順延/打切で実レース無し、is_canceled=True)
+                      / no_entries (entries 欠落の anomaly。通常 0 件想定)
 """
 
 import sys
@@ -60,7 +61,16 @@ def main() -> None:
         .rename("n_payouts")
     )
 
-    quality = meta[["race_date", "place_code", "place_name", "grade"]].copy()
+    # is_canceled が無い旧スキーマでも動作するよう、欠落時は False で埋める
+    if "is_canceled" not in meta.columns:
+        meta["is_canceled"] = False
+    else:
+        meta["is_canceled"] = (
+            meta["is_canceled"].astype(str).str.lower().isin(["true", "1"])
+        )
+    quality = meta[
+        ["race_date", "place_code", "place_name", "grade", "is_canceled"]
+    ].copy()
     quality = quality.merge(n_planned, on=["race_date", "place_code"], how="left")
     quality = quality.merge(n_results, on=["race_date", "place_code"], how="left")
     quality = quality.merge(n_payouts, on=["race_date", "place_code"], how="left")
@@ -74,6 +84,8 @@ def main() -> None:
     quality["completion_ratio"] = ratio.fillna(0).astype(float).round(4)
 
     def status_of(row: pd.Series) -> str:
+        if row["is_canceled"]:
+            return "canceled"
         if row["n_planned"] == 0:
             return "no_entries"
         if row["n_results"] == 0:
