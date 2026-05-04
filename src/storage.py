@@ -98,6 +98,13 @@ CSV_SCHEMAS: dict[str, list[str]] = {
         "bet_type", "bet_name", "kumi_ban",
         "payout", "popularity",
     ],
+    # netkeirin から取得した事前/確定オッズ。official_dt 時点の最新オッズ。
+    # max_odds は ワイド (W) の上限、それ以外は NULL。
+    "race_odds.csv": [
+        "race_date", "place_code", "race_no",
+        "bet_type", "kumi_ban", "odds", "max_odds",
+        "popularity", "official_dt",
+    ],
 }
 
 
