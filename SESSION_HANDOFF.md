@@ -7,7 +7,7 @@
 
 ## 自宅PC 向けタスク (2026-05-04): netkeirin オッズ 5年バックフィル
 
-### 手順
+### ターミナル1: バックフィル起動
 
 ```cmd
 cd C:\Users\user\Claude-Project\keirin-ai
@@ -18,24 +18,36 @@ REM ※ 自宅PC 側で ingest_day.py を再開する場合のみ必要。
 REM ※ backfill_odds.py だけ走らせる場合は不要。
 python -c "import pandas as pd; df = pd.read_csv('data/race_meta.csv'); df['is_canceled'] = df.get('is_canceled', False) if 'is_canceled' in df.columns else False; df.to_csv('data/race_meta.csv', index=False); print('OK')"
 
-REM オッズ 5年バックフィル開始 (バックグラウンド推奨)
-python backfill_odds.py 2021-01-01 2026-12-31 > backfill_odds.log 2>&1
+REM オッズ 5年バックフィル開始 (このターミナルで進捗が流れる)
+REM ログは data\backfill_odds.log にも自動書き込みされる (FileHandler)
+python -u backfill_odds.py 2021-01-01 2026-12-31
 ```
+
+### ターミナル2: リアルタイム進捗監視（PowerShell）
+
+```powershell
+# 直近のログを末尾追跡（tail -f 相当）
+Get-Content -Path data\backfill_odds.log -Wait -Tail 30
+
+# 完了 venue-day 数 (1分おきに見たい時)
+Get-Content data\backfill_odds_done.txt | Measure-Object -Line
+```
+
+### Git Bash の場合
+
+```bash
+tail -f data/backfill_odds.log     # 実況
+wc -l data/backfill_odds_done.txt  # 完了数
+```
+
+ログには **venue-day ごと** に `=== Done: YYYY-MM-DD pc=XX / 12 races / 7000+ rows ===` が出るので、約13秒ごとに新しい行が追加されます。25 venue-day おきにサマリ (`[N/13285] done=... rate=X.X/s ETA=Y.Yh`) も出ます。
 
 ### ETA
 
 - 対象: status=normal の **13,285 venue-day** (race_quality.csv から自動抽出)
 - 1 venue-day あたり 12レース × 0.8秒 + parse ≒ 13秒
 - **合計約 48 時間**（短縮されれば 36 時間程度）
-- 途中中断 OK: `data/backfill_odds_done.txt` で再開可能
-
-### 進捗確認
-
-```cmd
-wc -l data\backfill_odds_done.txt
-type data\backfill_odds_stats.json
-tail -50 data\backfill_odds.log
-```
+- 途中中断 OK: `data/backfill_odds_done.txt` で再開可能。`Ctrl+C` で安全停止
 
 ### 完了後
 
