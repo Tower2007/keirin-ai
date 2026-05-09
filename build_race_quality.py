@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pandas as pd
 
-DATA = Path(__file__).parent / "data"
+from src.config import DATA_DIR as DATA
 
 
 def main() -> None:

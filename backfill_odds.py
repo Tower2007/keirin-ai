@@ -26,10 +26,10 @@ from datetime import datetime
 
 import pandas as pd
 
+from src.config import DATA_DIR as DATA
 from src.netkeirin_client import NetkeirinClient
 from ingest_odds import ingest_one_day
 
-DATA = Path(__file__).parent / "data"
 DONE_FILE = DATA / "backfill_odds_done.txt"
 STATS_FILE = DATA / "backfill_odds_stats.json"
 

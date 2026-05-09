@@ -17,6 +17,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from src.client import KeirinClient, VENUE_CODES
+from src.config import DATA_DIR
 from src.storage import RaceDayIndex
 from ingest_day import ingest_one_day
 
@@ -27,8 +28,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PROGRESS_FILE = Path("data/backfill_done.txt")
-STATS_FILE = Path("data/backfill_stats.json")
+PROGRESS_FILE = DATA_DIR / "backfill_done.txt"
+STATS_FILE = DATA_DIR / "backfill_stats.json"
 
 # 既定範囲: 直近30日 (今日含まず、レース完了済みの範囲)
 DEFAULT_DAYS = 30

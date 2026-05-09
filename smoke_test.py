@@ -27,7 +27,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-SMOKE_DIR = Path("data/smoke")
+from src.config import DATA_DIR
+SMOKE_DIR = DATA_DIR / "smoke"
 
 
 def save_text(filename: str, text: str) -> Path:

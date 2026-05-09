@@ -21,9 +21,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from src.config import DATA_DIR as DATA
+
 sys.stdout.reconfigure(encoding="utf-8")
 
-DATA = Path(__file__).parent / "data"
 CALIBRATION_END = "2025-08-31"
 N_BINS = 20  # 校正用ビン数 (5% 刻み)
 

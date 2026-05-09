@@ -21,9 +21,10 @@ import pandas as pd
 import lightgbm as lgb
 from sklearn.metrics import roc_auc_score, mean_absolute_error
 
+from src.config import DATA_DIR as DATA
+
 sys.stdout.reconfigure(encoding="utf-8")
 
-DATA = Path(__file__).parent / "data"
 TRAIN_END = "2024-12-31"  # 含む
 TEST_START = "2025-01-01"
 

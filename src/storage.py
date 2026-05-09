@@ -12,9 +12,9 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+from .config import DATA_DIR  # noqa: F401  (再 export 用、外部スクリプトの後方互換)
 
-DATA_DIR = Path("data")
+logger = logging.getLogger(__name__)
 
 
 if sys.platform == "win32":
