@@ -107,7 +107,9 @@ def main() -> None:
     try:
         for i, (rd, pc, name) in enumerate(todo, 1):
             try:
-                result = ingest_one_day(client, pc, rd, skip_existing=True)
+                # done.txt で既に TODO 絞り込み済みのため skip_existing 不要。
+                # has_race_day による 1.85GB CSV フルスキャン (約80秒) を回避。
+                result = ingest_one_day(client, pc, rd, skip_existing=False)
                 rows = result.get("rows_added", 0)
                 n_rows += rows
                 if result.get("skipped"):
