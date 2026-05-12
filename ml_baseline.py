@@ -37,6 +37,18 @@ ODDS_NUM_FEATURES = [
     "n_st2_first", "is_incomplete_st2", "has_odds",
 ]
 
+# 弱ライン特徴量 (Phase 6 6a-2)
+# 完全なライン復元は非推奨 (Codex feasibility 調査)。代わりに probabilistic な
+# 弱特徴量として LightGBM の重み調整に任せる。過去 5 年すべてに付与可能。
+LINE_NUM_FEATURES = [
+    "is_probable_line_leader",
+    "same_region_support_count",
+    "has_clear_regional_partner",
+    "is_likely_tanki",
+    "same_pref_support_count",
+    "nige_propensity",
+]
+
 TRAIN_END = "2024-12-31"  # 含む
 TEST_START = "2025-01-01"
 
@@ -90,7 +102,7 @@ LGB_PARAMS_REG = {
 
 # ─── 1. データロード ─────────────────────────────────────────────────────
 
-def load_data(use_odds: bool = False) -> dict[str, pd.DataFrame]:
+def load_data(use_odds: bool = False, use_line: bool = False) -> dict[str, pd.DataFrame]:
     """status='normal' の venue-day だけに絞った各 CSV を返す。"""
     quality = pd.read_csv(DATA / "race_quality.csv")
     normal = quality.loc[quality["status"] == "normal", ["race_date", "place_code"]]
@@ -128,6 +140,18 @@ def load_data(use_odds: bool = False) -> dict[str, pd.DataFrame]:
         )
         out["odds_features"] = odds
         print(f"odds_features: {len(odds):,}")
+
+    if use_line:
+        line_path = DATA / "line_features.csv"
+        if not line_path.exists():
+            print(f"⚠️ line_features.csv not found at {line_path}")
+            print("   先に `python build_line_weak_features.py` を実行してください")
+            sys.exit(1)
+        line = pd.read_csv(line_path).merge(
+            normal, on=["race_date", "place_code"]
+        )
+        out["line_features"] = line
+        print(f"line_features: {len(line):,}")
 
     print(f"meta: {len(meta):,}, entries: {len(entries):,}, "
           f"stats: {len(stats):,}, results: {len(results):,}, "
@@ -205,6 +229,22 @@ def build_dataset(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
         n_with_odds = df["has_odds"].sum()
         print(f"  rows with odds features: {n_with_odds:,} / {len(df):,} "
               f"({n_with_odds / len(df):.1%})")
+
+    # 弱ライン特徴量を merge (use_line=True で load_data が用意済)
+    if "line_features" in data:
+        df = df.merge(
+            data["line_features"][keys + LINE_NUM_FEATURES],
+            on=keys, how="left",
+        )
+        # flag 系は 0 埋め、propensity は中央値で埋める
+        for col in ["is_probable_line_leader", "has_clear_regional_partner",
+                    "is_likely_tanki"]:
+            df[col] = df[col].fillna(0).astype(int)
+        for col in ["same_region_support_count", "same_pref_support_count"]:
+            df[col] = df[col].fillna(0).astype(int)
+        df["nige_propensity"] = df["nige_propensity"].fillna(
+            df["nige_propensity"].median()
+        )
 
     # 着順 (results) を結合してターゲット作成
     df = df.merge(
@@ -507,16 +547,19 @@ def main() -> None:
     ap.add_argument("--use-odds", action="store_true",
                     help="オッズ特徴量を追加 (odds_features.csv を merge)。"
                          "Phase 6 6a-3 upper-bound 検証用。")
+    ap.add_argument("--use-line", action="store_true",
+                    help="弱ライン特徴量を追加 (line_features.csv を merge)。"
+                         "Phase 6 6a-2 ライン構造の弱信号。")
     args = ap.parse_args()
 
     t0 = time.time()
     print("=" * 70)
     print("ML Baseline: 4 targets + 5 ticket types backtest")
-    print(f"  use_odds = {args.use_odds}")
+    print(f"  use_odds = {args.use_odds}, use_line = {args.use_line}")
     print("=" * 70)
 
     print("\n[1/4] Loading data...")
-    data = load_data(use_odds=args.use_odds)
+    data = load_data(use_odds=args.use_odds, use_line=args.use_line)
 
     print("\n[2/4] Building dataset...")
     df = build_dataset(data)
@@ -526,6 +569,8 @@ def main() -> None:
     feat_cols = list(FEAT_NUM)
     if args.use_odds:
         feat_cols = feat_cols + ODDS_NUM_FEATURES
+    if args.use_line:
+        feat_cols = feat_cols + LINE_NUM_FEATURES
     feat_cols = feat_cols + FEAT_CAT
     preds = train_all_models(train, test, feat_cols=feat_cols)
 
@@ -534,7 +579,12 @@ def main() -> None:
     print(f"  picks generated for {len(picks):,} races")
 
     # 出力ファイル名に suffix
-    suffix = "_with_odds" if args.use_odds else ""
+    suffix_parts = []
+    if args.use_odds:
+        suffix_parts.append("odds")
+    if args.use_line:
+        suffix_parts.append("line")
+    suffix = f"_with_{'_'.join(suffix_parts)}" if suffix_parts else ""
     picks_out = DATA / f"ml_picks{suffix}.csv"
     picks.to_csv(picks_out, index=False)
     print(f"  picks saved to {picks_out}")
