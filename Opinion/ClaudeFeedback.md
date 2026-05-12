@@ -7,6 +7,43 @@ Claude (実装担当 AI) の意見・所感を追記式で蓄積する。
 
 ---
 
+## 2026-05-12 (6): 観測基盤を毎分 cron → デーモン方式に置換
+
+### 経緯
+ユーザーから「毎分起動はウザい (CMD ウィンドウが点滅して使用感を損なう)」と
+指摘あり。実装の手抜きを反省。auto は `dynamic_scheduler.py` で per-race
+ワンショット方式、これに近い設計に変更すべきだった。
+
+### 修正内容
+- `ingest_odds_prerace.py` (毎分 cron 用) 削除
+- `scripts/cron_odds_prerace.bat` 削除
+- 新規 `ingest_odds_prerace_daemon.py`:
+  - 1 日 1 回 (8:00) に pythonw 起動でコンソール非表示
+  - 内部で各レースの 5 分前まで `time.sleep()` 待機 → capture → 次レースへ
+  - 最終レース後に exit
+  - entries 未準備時は最大 50 分 retry
+- cron 入れ替え:
+  - 旧: `keirin-ai-prerace-odds` (every minute) → 削除
+  - 新: `keirin-ai-prerace-daemon` (daily 8:00) → 登録
+
+### UX 改善
+- 起動回数/日: 1440 → 1
+- CMD 点滅: 毎分 → なし (pythonw)
+- 取得精度: ±1 分 → ±数秒
+
+### 比較結果記録 (G2 で生成)
+- `D:\keirin-ai-data\odds_comparison_report.md`
+- AUC 差分 (no_odds → with_odds):
+  - y_win: 0.811 → 0.850 (+0.039)
+  - y_top2: 0.780 → 0.826 (+0.046)
+  - y_top3: 0.750 → 0.789 (+0.039)
+  - y_rank MAE: 1.486 → 1.385 (-0.101 改善)
+- ROI: 全部マイナスだが、三連単 top10-25% で +0.10 以上の改善
+- 結論: odds 情報は明確に有用、ただし upper-bound 性能。pre-start snapshot
+  蓄積後の honest backtest で確認が必要。
+
+---
+
 ## 2026-05-12 (5): 6a-3 odds features + 3-way 比較実装 (G2)
 
 ### 実装内容

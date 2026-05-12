@@ -57,17 +57,28 @@ ingest_day.py は **差分取り込み** に対応しているため、同じ ve
 | タイミング | スクリプト | 取得されるもの |
 |---|---|---|
 | 朝 7:00 (cron) | `ingest_today_lines.py` | 当日開催の全場の meta/entries/**lines**/stats |
-| **毎分 (cron)** | **`ingest_odds_prerace.py`** | **発走 5 分前 pre-start odds snapshot** (Phase 6 観測基盤) |
+| **朝 8:00 (cron, daemon)** | **`ingest_odds_prerace_daemon.py`** | **発走 5 分前 pre-start odds snapshot** (Phase 6 観測基盤) |
 | 翌朝 5:00 (cron) | `ingest_day.py YESTERDAY VENUE` を全場ループ | results/payouts のみ追加 |
 
 ### pre-start odds snapshot 設計 (Phase 6, 2026-05-12 〜)
-- 発走 5 分前 (auto の `LEAD_MIN=5` 実証値) に odds スナップショット
+- 朝 8:00 に 1 度 `pythonw.exe` (コンソール非表示) でデーモン起動
+- 当日のレース全部について「st_time - 5 分」を計算 → 内部 `time.sleep()` で待機 →
+  ピンポイントで snapshot 取得 → 最終レース後に exit
+- 取得タイミング精度: ±数秒 (毎分 cron 方式 ±1分 より高精度)
+- CMD ウィンドウ点滅なし (毎分 cron の UX 問題を解消)
 - 保存先: `race_odds_prerace.csv` (既存 `race_odds.csv` とは別ファイル)
 - `snapshot_dt` (こちらの観測時刻) と `official_dt` (netkeirin 表示時刻) を分離記録
 - 試行ログは `prerace_snapshot_log.csv` (成功・失敗・no_odds を全部記録、dedup に使用)
+- 7:00 lines cron 失敗時は entries 未準備で最大 50 分 retry してから諦め
 - 既存 `race_odds.csv` は post-start (st_time + 0〜5 分) の "最終オッズ近似"、
   リーケージのため**本番 EV 評価には使えない** (Codex 発見、Gemini 確認)。
   upper-bound 検証用に保持。詳細: `Opinion/CodexOpinion.md` 2026-05-12 エントリ参照
+
+### cron 登録コマンド (pre-start daemon)
+```
+schtasks /create /tn "keirin-ai-prerace-daemon" /sc daily /st 08:00 ^
+  /tr "C:\Python313\pythonw.exe C:\Users\no28a\Claude-project\keirin-ai\ingest_odds_prerace_daemon.py"
+```
 
 **必ず朝に lines を取得**: PJ0305 の nInfo は完了後に空になるため。
 
