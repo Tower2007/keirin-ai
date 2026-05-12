@@ -105,6 +105,22 @@ CSV_SCHEMAS: dict[str, list[str]] = {
         "bet_type", "kumi_ban", "odds", "max_odds",
         "popularity", "official_dt",
     ],
+    # pre-start odds snapshot (発走 N 分前)。cron で本番運用向けに蓄積。
+    # snapshot_dt は ローカル観測時刻、official_dt はソース側の表示時刻 (Codex/Gemini 指摘で分離)。
+    # minutes_before_start = (st_time - snapshot_dt) を分単位で記録 (整数)。
+    "race_odds_prerace.csv": [
+        "race_date", "place_code", "race_no",
+        "bet_type", "kumi_ban", "odds", "max_odds",
+        "popularity", "official_dt",
+        "snapshot_dt", "minutes_before_start",
+    ],
+    # prerace snapshot 取得試行ログ (成功/失敗、リトライ管理用)。
+    # status: ok / no_odds / fail
+    "prerace_snapshot_log.csv": [
+        "race_date", "place_code", "race_no",
+        "st_time", "snapshot_dt", "minutes_before_start",
+        "status", "n_rows", "note",
+    ],
 }
 
 

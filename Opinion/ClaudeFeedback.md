@@ -7,6 +7,51 @@ Claude (実装担当 AI) の意見・所感を追記式で蓄積する。
 
 ---
 
+## 2026-05-12 (4): 観測基盤 6a-1 実装着手 (F1)
+
+### Codex 回答 (ライン逆引き feasibility) 受領
+`Opinion/CodexOpinion.md` 2026-05-12 (line reconstruction) 参照。
+
+結論:
+- `in_line_jyuni` はライン内番手ではない (非空 3,476 行が全て失格者の違反位置)
+- 簡易ヒューリスティック: 完全一致 2/46、same-line precision 0.48 → 実用不可
+- 「弱ライン特徴量」アプローチに切り替え:
+  - `is_probable_line_leader` (脚質、back_cnt、nige_cnt)
+  - `same_region_support_count` (同地区追/両人数)
+  - `has_clear_regional_partner`
+  - `is_likely_tanki`
+  - `line_type` (entries に既存)
+- 二層モデル: 短期 (ラインなし + 弱特徴) / 中期 (公式ライン蓄積後の shadow)
+
+### F1 実装: 観測基盤 6a-1
+ユーザー判断 (F1) で「今日中に観測基盤を最小実装、蓄積開始」と決定。
+6a-2 (弱ライン特徴) と 6a-3 (upper-bound 検証) は別タスクへ。
+
+実装内容:
+- `ingest_odds_prerace.py`: 毎分 cron で起動、本日のレースで [4, 6] 分前窓のレースの
+  odds を netkeirin から取得して `race_odds_prerace.csv` に追記
+- `scripts/cron_odds_prerace.bat`: cron ラッパー
+- `src/storage.py` に schema 追加: `race_odds_prerace.csv` + `prerace_snapshot_log.csv`
+- `CLAUDE.md` 運用フローに pre-start snapshot の節を追加
+
+設計上の重要事項 (Codex/Gemini 指摘を反映):
+- `official_dt` (netkeirin 表示時刻) と `snapshot_dt` (こちら観測時刻) を分離記録
+- `minutes_before_start` も併記
+- 既存 `race_odds.csv` は post-start = リーケージのため upper-bound 用途のみ
+
+### 次のアクション
+1. ユーザーが cron 登録:
+   `schtasks /create /tn "keirin-ai-prerace-odds" /sc minute /mo 1 /tr "C:\Users\no28a\Claude-project\keirin-ai\scripts\cron_odds_prerace.bat"`
+2. 翌日 (5/13) から live 蓄積開始 (5/12 は既に開催終了)
+3. 平行で 6a-2 (`build_line_weak_features.py`) と 6a-3 (`build_odds_features.py`) を着手
+
+### TODO (6a-2 / 6a-3)
+- 6a-2: 過去 5 年の `race_entries` + `race_stats` から weak line features 5 候補を生成
+- 6a-3: ST2/SH2 から odds features 6 候補生成 + `ml_baseline.py` に USE_ODDS フラグ追加で 3-way 比較
+- 6b 蓄積後: weekly drift report (live ↔ final 突合) 実装
+
+---
+
 ## 2026-05-12 (3): Gemini 回答受領 + ライン逆引き調査を Codex に依頼
 
 ### Gemini 回答の評価
