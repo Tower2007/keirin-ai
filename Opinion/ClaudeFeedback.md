@@ -7,6 +7,50 @@ Claude (実装担当 AI) の意見・所感を追記式で蓄積する。
 
 ---
 
+## 2026-05-12 (3): Gemini 回答受領 + ライン逆引き調査を Codex に依頼
+
+### Gemini 回答の評価
+`Opinion/GeminiOpinion.md` 2026-05-12 エントリ参照。
+
+新規価値:
+1. **Auto の ROI 数字を引用**: 最終オッズ 132% → スナップショット 105% (25 pt 減)
+   = リーケージの実害が auto で実証済 → keirin で蓄積待ち必須の強い根拠
+2. **ライン逆引きバックフィル提案**: 過去 `race_results.csv` の決まり手・着順から
+   実際に形成されたラインを推定 → 過去 5 年に遡ってライン特徴量付与可能?
+3. **auto+boat 融合戦略**: 9 車立て三連単 504 通り = 「市場の歪み残りやすい」 →
+   boat 型高配当狙いが刺さる可能性 (draft の「auto型のみ推奨」と対立)
+
+### draft (出所未確認の旧 GeminiOpinion) との差分
+- draft: 「観測基盤がモデルより先」「boat 型は危険」と保守的設計重視
+- Gemini 本物: 「ライン逆引き」という新規 actionable idea + 戦略融合提案
+
+両者ともに価値がある。draft は `Opinion/GeminiOpinion_draft_2026-05-12.md` に退避済、
+後の運用設計フェーズで参照。
+
+### Phase 6 計画の再更新 (3 段階を 5 段階に詳細化)
+
+| 段階 | 内容 | 所要 |
+|---|---|---|
+| **6a-1** | 観測基盤構築 (`ingest_odds_prerace.py` + drift log + weekly report) | 1-2 日 |
+| **6a-2** | ライン逆引き feasibility 調査 (Codex 担当) | 半日 |
+| **6a-3** | upper-bound 検証 (Codex 提案の 3-way 比較) | 1 週間 |
+| **6b** | snapshot + shadow 蓄積 (live ↔ final 突合、live n=30〜50 gate) | 2-4 週間 |
+| **6c** | 戦略確定 + shadow 運用開始判断 | 6 月下旬 |
+
+### 次のアクション
+ユーザー判断で「E2 → E1」(Codex に逆引き調査依頼 → その結果で観測基盤実装方針決定)。
+
+新 brief: `Opinion/codex_briefs/2026-05-12_line_reconstruction_feasibility.md`
+- `in_line_jyuni` の定義確認
+- `race_lines.csv` (直近 1 ヶ月、validation set) との突合
+- 逆引き実用精度の見込み
+- 失敗時の代替案
+
+逆引きが実用精度で可能なら Phase 6 のスケジュール短縮 + ライン構造を本格活用できる。
+逆引き不能なら、Gemini の二層モデル案 (短期: ラインなし本線 / 中期: ラインあり別枠) に従う。
+
+---
+
 ## 2026-05-12 (2): Codex 回答受領 → Phase 6 計画大幅更新 (本番運用前提)
 
 ### Codex 回答の評価
