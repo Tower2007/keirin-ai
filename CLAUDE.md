@@ -12,6 +12,18 @@
 - データ取得: keirin.jp（公式）の HTML 内埋め込み JSON を抽出 / オッズは netkeirin
 - ML: LightGBM (ml_baseline.py / ml_ev_backtest.py 実装済)
 
+## AI 協働運用
+
+複数 AI で意見を出し合って改善する体制 (Auto_racing_AI と同パターン)。
+
+| AI | 役割 | 編集権限 |
+|---|---|---|
+| Claude Code | 実装本体 | プロジェクト全体 |
+| Codex | 分析・数値検証・代替案立案 | `Opinion/` のみ |
+| Gemini | 大局観・第三者レビュー (スポット) | `Opinion/` のみ |
+
+詳細: `AGENTS.md` (Codex 用), `GEMINI.md` (Gemini 用), `Opinion/README.md`
+
 ## データ保存先 (DATA_DIR)
 
 `.env` の `DATA_DIR` で指定。省略時はプロジェクト直下 `data/`。
