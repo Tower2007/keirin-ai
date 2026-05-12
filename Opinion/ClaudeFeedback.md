@@ -7,6 +7,35 @@ Claude (実装担当 AI) の意見・所感を追記式で蓄積する。
 
 ---
 
+## 2026-05-12 (5): 6a-3 odds features + 3-way 比較実装 (G2)
+
+### 実装内容
+- `build_odds_features.py`: race_odds.csv (47.9M 行) → per-(race, car) 特徴量 CSV
+  生成 (958,600 行、約 2 分)。Codex 提案の 6 候補 + log scale + flag 系を実装。
+  ST2/SH2 のみ初版 (W, RH3, RT3 は段階投入で後段)。
+- `ml_baseline.py` 拡張: `--use-odds` フラグ追加。`load_data` / `build_dataset` /
+  `train_all_models` が odds 特徴量を optional で受け入れ。出力ファイルは
+  `_with_odds` suffix で区別。
+- `compare_odds_baseline.py`: no_odds / with_odds 両方を走らせて
+  `odds_comparison_report.md` を生成。
+
+### 副次的なバグ修正
+- race_meta.csv のスキーマドリフト修正 (header 8 列 / 一部 row 9 列の混在)。
+  `is_canceled` 列を全行に追加 (古い 13,437 行は False、新しい 59 行は既存値)。
+
+### 設計上の注意
+- `odds_features.csv` は race_odds.csv (post-start = リーケージあり) から作成
+- ML に入れて測る AUC/ROI は upper-bound 性能の参考値
+- 本番性能の証明にはならない (Codex/Gemini 共通指摘)
+- 本番運用は `race_odds_prerace.csv` (pre-start snapshot) を別途使う
+
+### 次のアクション
+1. ユーザーが `python compare_odds_baseline.py` 実行 (約 16-40 分、4 ターゲット × 2 run)
+2. 結果 `odds_comparison_report.md` を見て odds features の効果を確認
+3. その後 G1 (6a-2: 弱ライン特徴) 実装に移る
+
+---
+
 ## 2026-05-12 (4): 観測基盤 6a-1 実装着手 (F1)
 
 ### Codex 回答 (ライン逆引き feasibility) 受領

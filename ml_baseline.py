@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import argparse
 import sys
 import time
 from pathlib import Path
@@ -24,6 +25,17 @@ from sklearn.metrics import roc_auc_score, mean_absolute_error
 from src.config import DATA_DIR as DATA
 
 sys.stdout.reconfigure(encoding="utf-8")
+
+# ⚠️ オッズ特徴量 (Phase 6 6a-3 upper-bound 用)
+# race_odds.csv の official_dt は st_time + 0〜5 分のため運用リーケージあり。
+# ここを ML に入れて測る AUC/ROI は "市場込みの上限性能" であり、本番の
+# 期待値とは別物。本番運用は race_odds_prerace.csv (発走 5 分前) を別途使う。
+ODDS_NUM_FEATURES = [
+    "imp_winprob_st2", "imp_top2prob_sh2",
+    "pop_rank_st2_1st", "pop_rank_sh2_min",
+    "odds_min_st2_1st", "log_odds_min_st2_1st",
+    "n_st2_first", "is_incomplete_st2", "has_odds",
+]
 
 TRAIN_END = "2024-12-31"  # 含む
 TEST_START = "2025-01-01"
@@ -78,7 +90,7 @@ LGB_PARAMS_REG = {
 
 # ─── 1. データロード ─────────────────────────────────────────────────────
 
-def load_data() -> dict[str, pd.DataFrame]:
+def load_data(use_odds: bool = False) -> dict[str, pd.DataFrame]:
     """status='normal' の venue-day だけに絞った各 CSV を返す。"""
     quality = pd.read_csv(DATA / "race_quality.csv")
     normal = quality.loc[quality["status"] == "normal", ["race_date", "place_code"]]
@@ -100,13 +112,27 @@ def load_data() -> dict[str, pd.DataFrame]:
         normal, on=["race_date", "place_code"]
     )
 
-    print(f"meta: {len(meta):,}, entries: {len(entries):,}, "
-          f"stats: {len(stats):,}, results: {len(results):,}, "
-          f"payouts: {len(payouts):,}")
-    return {
+    out = {
         "meta": meta, "entries": entries, "stats": stats,
         "results": results, "payouts": payouts,
     }
+
+    if use_odds:
+        odds_path = DATA / "odds_features.csv"
+        if not odds_path.exists():
+            print(f"⚠️ odds_features.csv not found at {odds_path}")
+            print("   先に `python build_odds_features.py` を実行してください")
+            sys.exit(1)
+        odds = pd.read_csv(odds_path).merge(
+            normal, on=["race_date", "place_code"]
+        )
+        out["odds_features"] = odds
+        print(f"odds_features: {len(odds):,}")
+
+    print(f"meta: {len(meta):,}, entries: {len(entries):,}, "
+          f"stats: {len(stats):,}, results: {len(results):,}, "
+          f"payouts: {len(payouts):,}")
+    return out
 
 
 # ─── 2. 特徴量 + ターゲット ────────────────────────────────────────────
@@ -165,6 +191,20 @@ def build_dataset(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
         data["meta"][["race_date", "place_code", "grade"]],
         on=["race_date", "place_code"], how="left",
     )
+
+    # オッズ特徴量を merge (use_odds=True で load_data が用意済)
+    if "odds_features" in data:
+        df = df.merge(
+            data["odds_features"][keys + ODDS_NUM_FEATURES],
+            on=keys, how="left",
+        )
+        # has_odds / is_incomplete_st2 は flag 系なので欠損を 0 埋め
+        # 他の数値列は NaN のまま (LightGBM が欠損として扱う)
+        df["has_odds"] = df["has_odds"].fillna(0).astype(int)
+        df["is_incomplete_st2"] = df["is_incomplete_st2"].fillna(1).astype(int)
+        n_with_odds = df["has_odds"].sum()
+        print(f"  rows with odds features: {n_with_odds:,} / {len(df):,} "
+              f"({n_with_odds / len(df):.1%})")
 
     # 着順 (results) を結合してターゲット作成
     df = df.merge(
@@ -238,8 +278,12 @@ def train_one(
     return model, pred, score
 
 
-def train_all_models(train: pd.DataFrame, test: pd.DataFrame) -> dict[str, np.ndarray]:
-    feat_cols = FEAT_NUM + FEAT_CAT
+def train_all_models(
+    train: pd.DataFrame, test: pd.DataFrame,
+    feat_cols: list[str] | None = None,
+) -> dict[str, np.ndarray]:
+    if feat_cols is None:
+        feat_cols = FEAT_NUM + FEAT_CAT
     print(f"features ({len(feat_cols)}): {feat_cols}")
     print()
     print("=== Training ===")
@@ -459,27 +503,39 @@ def backtest_thresholds(
 # ─── 5. メイン ────────────────────────────────────────────────────────
 
 def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--use-odds", action="store_true",
+                    help="オッズ特徴量を追加 (odds_features.csv を merge)。"
+                         "Phase 6 6a-3 upper-bound 検証用。")
+    args = ap.parse_args()
+
     t0 = time.time()
     print("=" * 70)
     print("ML Baseline: 4 targets + 5 ticket types backtest")
+    print(f"  use_odds = {args.use_odds}")
     print("=" * 70)
 
     print("\n[1/4] Loading data...")
-    data = load_data()
+    data = load_data(use_odds=args.use_odds)
 
     print("\n[2/4] Building dataset...")
     df = build_dataset(data)
     train, test = split_train_test(df)
 
     print("\n[3/4] Training models...")
-    preds = train_all_models(train, test)
+    feat_cols = list(FEAT_NUM)
+    if args.use_odds:
+        feat_cols = feat_cols + ODDS_NUM_FEATURES
+    feat_cols = feat_cols + FEAT_CAT
+    preds = train_all_models(train, test, feat_cols=feat_cols)
 
     print("\n[4/4] Backtest...")
     picks = make_picks(test, preds)
     print(f"  picks generated for {len(picks):,} races")
 
-    # 後で再分析できるよう picks を保存
-    picks_out = DATA / "ml_picks.csv"
+    # 出力ファイル名に suffix
+    suffix = "_with_odds" if args.use_odds else ""
+    picks_out = DATA / f"ml_picks{suffix}.csv"
     picks.to_csv(picks_out, index=False)
     print(f"  picks saved to {picks_out}")
 
@@ -507,10 +563,10 @@ def main() -> None:
     print("ROI: -1.0 = 全損, 0 = 損益±0, +0.5 = +50% (元手 100円→150円)")
     print("controlled rate (公営競技控除): -25% 程度が損益分岐の目安")
 
-    # 結果保存 (v2 版: レース内相対化特徴あり)
-    out = DATA / "ml_baseline_v2_result.csv"
+    # 結果保存 (suffix で odds あり/なし区別)
+    out = DATA / f"ml_baseline_v2_result{suffix}.csv"
     bt.to_csv(out, index=False)
-    out_th = DATA / "ml_threshold_result.csv"
+    out_th = DATA / f"ml_threshold_result{suffix}.csv"
     bt_thresh.to_csv(out_th, index=False)
     print(f"\nSaved: {out}")
     print(f"Saved: {out_th}")
