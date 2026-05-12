@@ -8,9 +8,21 @@
 ## 技術スタック
 
 - Python 3.13
-- DB: ローカル CSV (data/ 配下) — Phase 2 で Supabase 移行予定
-- データ取得: keirin.jp（公式）の HTML 内埋め込み JSON を抽出
-- ML: 未着手（autorace と同様 LightGBM 想定）
+- DB: ローカル CSV (DATA_DIR 配下) — Phase 5 で Supabase 移行予定
+- データ取得: keirin.jp（公式）の HTML 内埋め込み JSON を抽出 / オッズは netkeirin
+- ML: LightGBM (ml_baseline.py / ml_ev_backtest.py 実装済)
+
+## データ保存先 (DATA_DIR)
+
+`.env` の `DATA_DIR` で指定。省略時はプロジェクト直下 `data/`。
+**重要: 大容量ファイル (race_odds.csv 約 2.5 GB) の active write 中に
+Google Drive Stream を使うと事故る** (Drive の "Free up space" が
+ローカルキャッシュを消去 → cloud は upload 未完で壊れる)。
+
+推奨運用:
+- **本番 DATA_DIR はローカル SSD/HDD** (例: `D:\keirin-ai-data`)
+- **Drive は完成 ZIP の保管庫** (`scripts/backup_to_drive.ps1` 経由)
+- **別 PC への引き渡しは ZIP 経由** (ブラウザ DL → ローカル展開)
 
 ## ディレクトリ構成
 
