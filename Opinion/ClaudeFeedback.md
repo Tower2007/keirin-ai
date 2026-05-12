@@ -7,6 +7,99 @@ Claude (実装担当 AI) の意見・所感を追記式で蓄積する。
 
 ---
 
+## 2026-05-12 (7): Phase 6 中間まとめ (1 日の成果整理)
+
+### 今日 1 日の成果サマリ
+
+長丁場だった (Drive 事故対応 → AI 協働導入 → Phase 6 着手 → cron UX 改善)。
+データロスは完全復旧し、Phase 6 観測基盤と ML 拡張がひと段落。
+
+#### データ復旧 (5/10〜5/12 早朝)
+- Google Drive Stream の "Free up space" が race_odds.csv (2.5GB) を破壊
+- Drive `lost_and_found` から救出 + 39 時間の再 backfill で完全復活
+- DATA_DIR をローカル D:\keirin-ai-data に移動、Drive は ZIP バックアップ専用に変更
+- CLAUDE.md / scripts/backup_to_drive.py で運用ルール明文化
+
+#### AI 協働体制導入 (5/12)
+- Claude / Codex / Gemini の 3 体制を Auto_racing_AI から移植
+- AGENTS.md / GEMINI.md / Opinion/README.md / 各意見ファイル整備
+- Codex / Gemini 双方から Phase 6 設計レビュー受領
+
+#### Phase 6 観測基盤 + ML 拡張
+- `ingest_odds_prerace_daemon.py`: 朝 8:00 起動の pre-start odds snapshot daemon
+- `build_odds_features.py`: race_odds.csv → odds_features.csv (958k 行、2 分)
+- `build_line_weak_features.py`: race_entries + race_stats → line_features.csv
+- `ml_baseline.py` 拡張: --use-odds / --use-line フラグで 4-way 比較対応
+- `compare_4way.py`: base / +line / +odds / +odds+line を自動比較
+
+### 4-way 比較結果 (D:\keirin-ai-data\compare_4way_report.md)
+
+#### AUC (y_win) per config
+| Config | AUC | Δ vs base |
+|---|---|---|
+| base | 0.8115 | — |
+| +line | 0.8116 | +0.0001 (実質ゼロ) |
+| +odds | 0.8505 | +0.039 |
+| +odds+line | 0.8506 | +0.0001 vs odds |
+
+#### 全レース ROI 差分 (line 純効果、with_line - base)
+| 券種 | Δ ROI |
+|---|---|
+| 二車複 | -0.007 |
+| 二車単 | -0.011 |
+| 三連複 | -0.003 |
+| 三連単 | +0.003 |
+| ワイド | +0.001 |
+
+→ ノイズレベル、全レース戦略では line 不要
+
+#### 高確信レース (top 5%) では line が効く
+| 券種 | base top5% | +line top5% | Δ |
+|---|---|---|---|
+| 二車単 | -0.197 | **-0.133** | +0.064 ⭐ |
+| 三連単 | -0.322 | -0.288 | +0.034 |
+| ワイド | -0.173 | -0.166 | +0.007 |
+
+→ 弱ラインは「予測の校正」役割。高確信レース絞り込みで価値あり。
+
+### 解釈と次の方針
+
+1. **既存の `kyaku` / `prefecture` 特徴量が地区+脚質情報をほぼ吸収済み**
+   - LightGBM が既に「同地区+追い」を組み合わせ学習している
+   - 弱ライン特徴量を明示的に渡しても新情報なし
+
+2. **odds は明確に有用、ただし upper-bound**
+   - 二車単 top10%/25% で +0.1 以上の ROI 改善 (リーケージあり)
+   - pre-start snapshot 蓄積後に honest backtest で再評価
+
+3. **本物のライン構造モデルは公式 race_lines.csv 蓄積を待つ**
+   - 弱特徴量では届かない領域 (Gemini 指摘の「ラインは構造情報」)
+   - 数ヶ月分の蓄積後に line_id 直接利用モデルを試行
+
+### Phase 6 進捗ステータス (5/12 23:30 時点)
+
+| 段階 | 内容 | 状態 |
+|---|---|---|
+| 6a-1 | 観測基盤 (daemon + snapshot log + schema) | ✅ 完了、cron 登録済 |
+| 6a-2 | 弱ライン特徴量 | ✅ 完了、補助的価値あり |
+| 6a-3 | upper-bound 検証 (odds 3-way 比較) | ✅ 完了、odds 有効性確認 |
+| 6b | snapshot + shadow 蓄積 | 🕒 明日 5/13 朝から自動開始 |
+| 6c | shadow → live 移行判断 | 🕒 n=30〜50 達成後 (6 月下旬) |
+
+### 明日 5/13 以降の確認事項
+1. 朝 8:00 daemon が正常起動するか (logs/cron_prerace_daemon_2026-05-13.log)
+2. race_odds_prerace.csv に snapshot 行が積み上がるか
+3. prerace_snapshot_log.csv に status=ok が増えていくか
+4. 数日後: snapshot 取得タイミングのズレ (minutes_before_start 分布) を監査
+
+### 反省
+- cron UX (毎分起動 → CMD 点滅) を最初に考慮できず、ユーザーに指摘された
+- 「実装が楽」だけで判断せず、運用上の影響を必ず確認する
+- Auto_racing_AI に dynamic_scheduler.py という先行事例があったのに参照不足
+- 今後同様の設計時は UX への影響を必ず確認してから提案する
+
+---
+
 ## 2026-05-12 (6): 観測基盤を毎分 cron → デーモン方式に置換
 
 ### 経緯
