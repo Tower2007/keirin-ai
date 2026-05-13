@@ -7,6 +7,138 @@ Claude (実装担当 AI) の意見・所感を追記式で蓄積する。
 
 ---
 
+## 2026-05-13 (2): N2 W odds 追加 成功 + 段階投入のまとめ
+
+### N2: W (ワイド) odds 特徴量追加 — 成功
+
+`build_odds_features.py` 拡張で W から 5 特徴量を抽出:
+- `imp_top3prob_w`: W contains-car の 3 着内圏 marginal (正規化)
+- `pop_rank_w_min`: W 含む組合せの min popularity
+- `w_odds_min_avg`: W min odds 平均 (下限期待値)
+- `w_odds_range_avg`: W (max - min) odds 平均 (不確実性指標)
+- `has_w_odds`: 欠損フラグ
+
+`ml_baseline.py` に `--use-w-odds` フラグ追加。
+
+### 結果 (compare_w_odds_compare_report.md)
+
+**AUC**:
+| Target | with_odds | with_odds_w | Δ |
+|---|---|---|---|
+| y_win | 0.8505 | 0.8506 | +0.0001 |
+| y_top2 | 0.8255 | 0.8257 | +0.0002 |
+| y_top3 | 0.7889 | **0.7942** | **+0.0053** ⭐ |
+| y_rank MAE | 1.3853 | **1.3724** | **-0.0129 改善** ⭐ |
+
+→ y_top3 で AUC +0.005 = W は 3 着内予測に効く (Codex 予想通り)
+
+**Top 5% ROI 改善 (with_odds_w - with_odds)**:
+| 券種 | top5% | top10% | top25% |
+|---|---|---|---|
+| 二車単 | +0.035 ⭐ | +0.008 | +0.002 |
+| 三連複 | +0.033 ⭐ | +0.026 ⭐ | +0.018 ⭐ |
+| ワイド | +0.023 ⭐ | +0.019 ⭐ | +0.006 |
+| 三連単 | -0.008 | -0.049 ⚠️ | -0.027 |
+
+→ 三連複/ワイド/二車単で一貫改善、**三連単のみ悪化**
+
+**的中率改善**:
+- 三連複: 0.2244 → 0.2436 (+0.019、相対 +8.5%)
+- ワイド: 0.411 → 0.4222 (+0.011)
+
+### 三連単悪化の解釈
+W 情報でモデルが「3 着内」予測に最適化された結果、「1 → 2 → 3 の順序」判定が
+弱まった可能性。「順序予測には W は不向き」という trade-off。
+
+### Phase 6 特徴量段階投入のサマリ (5/12〜5/13)
+
+| 試行 | 内容 | AUC 寄与 | ROI 寄与 | 評価 |
+|---|---|---|---|---|
+| ST2 + SH2 | 第 1 段、Codex 6 候補 | y_win +0.039 / y_top2 +0.046 | 二車単/三連単 top10% +0.10 | ✅ 採用 |
+| 弱ライン特徴 | nige_propensity 等 6 候補 | ほぼゼロ | top5% 二車単 +0.064 のみ | △ 補助的 |
+| Mispricing | rank diff 系 6 候補 | ゼロ | 三連単 -0.024 (悪化) | ❌ 採用見送り |
+| W odds | 第 2 段、Codex 5 候補 | y_top3 +0.005 | 三連複/ワイド top5% +0.02-0.03 | ✅ 採用 |
+
+採用基準: **AUC か ROI のいずれかで一貫改善** + 既存特徴量にない情報。
+
+### 学び
+1. **市場系特徴量 (ST2/SH2/W) は強い**: 上限性能押し上げに直接効く
+2. **派生・組み合わせ特徴量 (mispricing) は LightGBM が既に内部学習している**
+3. **弱特徴量は AUC では無価値、top X% で限定的に効く**
+4. **trade-off に注意**: W で y_top3 向上 ↔ 三連単悪化
+5. **段階投入は正解**: 一気に入れずに ablation で寄与度を見ると trade-off が判明
+
+### 次のステップ (P4 = 休む)
+今日のセッション終了。明日 5/14 (木) 朝の daemon 起動状況確認が次の優先事項。
+
+5/14 確認項目:
+1. `logs/cron_prerace_daemon_2026-05-14.log` が生成されるか
+2. 5/14 開催が複数あれば snapshot 蓄積開始
+3. `race_odds_prerace.csv` に行が積み上がるか
+4. `prerace_snapshot_log.csv` の status 分布
+
+### TODO (時間あれば)
+- RH3 / RT3 odds 特徴量追加で y_top3/y_rank をさらに強化検討
+- ただし市場依存度が更に上がる → 本番リーケージ問題が拡大する懸念
+- pre-start odds 蓄積後の honest backtest が本命
+
+---
+
+## 2026-05-13: N3 Mispricing 失敗 + Feature Importance 分析
+
+### Feature Importance 分析 (M1)
+`analyze_feature_importance.py` で with_odds_line 構成のモデルから gain
+importance を抽出 (`feature_importance_report.md` 参照)。
+
+**衝撃の発見**: モデルは 80%+ 市場依存:
+- y_win の 81.83% は `imp_winprob_st2` で説明
+- y_top2 の 84.30% は `imp_top2prob_sh2` で説明
+- y_top3 の 79.49% は `imp_top2prob_sh2` で説明
+
+弱ライン特徴量は total 1% 未満:
+- `nige_propensity` 0.97% (唯一の生存)
+- 他の 5 特徴は全部 0.25% 未満
+- `has_clear_regional_partner` / `is_likely_tanki` はほぼゼロ
+
+→ Gemini 予言通り「市場の蒸留モデル」になっている
+
+### N3 Mispricing 試行と失敗
+市場 vs 戦績の食い違いを派生特徴量化:
+- `pop_minus_syouritu_rank` (rank-of-rank 正規化)
+- `pop_minus_rentairitu2_rank` / `pop_minus_heikin_tokuten_rank`
+- `imp_winprob_residual` (確率残差)
+- `is_underpriced_stats_top` / `is_overpriced_market_top` フラグ
+
+with_odds vs with_odds_mp 比較結果:
+
+| 指標 | 結果 |
+|---|---|
+| AUC 動き | ほぼゼロ (±0.0001) |
+| 全レース 三連単 ROI | **-0.024 悪化** |
+| top 5% 三連単 ROI | **+0.027 改善** |
+| top 25% 三連単 ROI | -0.028 悪化 |
+
+→ 一貫した improvement なし、過学習傾向あり
+
+**結論: mispricing 採用見送り**
+
+### 失敗の解釈
+- 単純な rank diff では LightGBM がすでに内部で学習している
+- 既存 odds + stats が同情報を吸収済み
+- 「市場の歪み」をもっと深く設計しないと edge は出ない
+  (例: 過去 N レース内での同条件成績、最有力候補とのギャップ等)
+
+### 教訓
+- 派生特徴量は「LightGBM が組み合わせ学習で取れない情報」でないと意味なし
+- rank diff は素直すぎる
+- 試行錯誤コストは半日 + 7-8 分 compute、得るものは「方向性として違う」確認
+
+### 次のアクション (5/13 夜)
+N2: W (ワイド) odds 特徴量を追加 (当初予定通り Codex 段階投入の次フェーズ)。
+y_top3 で効く可能性。market の蒸留度はさらに上がる懸念もあるが、ablation で見る。
+
+---
+
 ## 2026-05-12 (7): Phase 6 中間まとめ (1 日の成果整理)
 
 ### 今日 1 日の成果サマリ

@@ -7,18 +7,20 @@ Phase 6 6a-3: upper-bound 検証用。Codex 提案の 6 候補 + log scale を�
 参考値のみ。本番運用は race_odds_prerace.csv (pre-start snapshot) を別途使用。
 
 実装方針 (Codex 提案):
-- ST2 と SH2 のみ初版 (W, RH3, RT3 は段階投入で後段)
-- 命名: imp_winprob_st2 / imp_top2prob_sh2 (SH2 は順序なしなので "top2 prob")
+- 第 1 段: ST2 と SH2 (実装済)
+- 第 2 段: W (ワイド) を追加 (2026-05-13)
+- 命名: imp_winprob_st2 / imp_top2prob_sh2 / imp_top3prob_w
 - レース内正規化で sum=1 (元値は失う)
 - log(odds_min) も raw scale として保持
 - is_incomplete_st2 フラグでキャンセル車検出
-- has_odds フラグで欠損明示 (0 埋め禁止)
+- has_odds / has_w_odds フラグで欠損明示 (0 埋め禁止)
 
 race_odds.csv の構造:
 - ヘッダなし (Codex 発見)
 - columns: race_date, place_code, race_no, bet_type, kumi_ban, odds, max_odds, popularity, official_dt
 - ST2: "X-Y" (1着 X, 2着 Y)
 - SH2: "X=Y" (X<Y、順序なし)
+- W:   "X=Y" (X<Y、順序なし) + max_odds 列がワイドだけ非ゼロ
 
 使い方:
   python build_odds_features.py
@@ -46,6 +48,7 @@ ODDS_HEADER = [
 
 OUT_COLS = [
     "race_date", "place_code", "race_no", "car_no",
+    # ─── ST2/SH2 系 (第 1 段、Codex 提案) ────
     "imp_winprob_st2",      # ST2 1着付けからの暗黙勝率 (sum=1 normalized)
     "imp_top2prob_sh2",     # SH2 contains-car の連対圏 marginal (正規化)
     "pop_rank_st2_1st",     # ST2 1着付けの min popularity
@@ -55,6 +58,12 @@ OUT_COLS = [
     "n_st2_first",          # ST2 1着付け候補数 (期待値: n_cars - 1)
     "is_incomplete_st2",    # n_st2_first < expected = 1
     "has_odds",             # ST2 or SH2 にこの車の組合せが存在するか
+    # ─── W 系 (第 2 段、2026-05-13 追加) ────
+    "imp_top3prob_w",       # W contains-car の 3 着内圏 marginal (min odds ベース正規化)
+    "pop_rank_w_min",       # W 含む組合せの min popularity
+    "w_odds_min_avg",       # W min odds の平均 (車別下限の期待値)
+    "w_odds_range_avg",     # W (max - min) odds の平均 (不確実性指標)
+    "has_w_odds",           # W にこの車の組合せが存在するか
 ]
 
 
@@ -77,15 +86,17 @@ def compute_race_features(race_key, rows) -> list[dict]:
     """1 レース分の rows から per-car 特徴量を計算。"""
     race_date, place_code, race_no = race_key
 
-    # ST2 と SH2 だけ抽出
+    # ST2 / SH2 / W を抽出
     st2_rows = []  # (1st_car, 2nd_car, odds, popularity)
     sh2_rows = []  # (car_a, car_b, odds, popularity)  ※昇順
+    w_rows = []    # (car_a, car_b, odds_min, odds_max, popularity)  ※昇順
     cars_in_race: set[int] = set()
 
     for row in rows:
         bet_type = row[3]
         kumi_ban = row[4]
         odds = safe_float(row[5])
+        max_odds = safe_float(row[6]) if len(row) > 6 else None
         pop = safe_int(row[7]) if len(row) > 7 else None
         if odds is None:
             continue
@@ -108,6 +119,15 @@ def compute_race_features(race_key, rows) -> list[dict]:
                 continue
             sh2_rows.append((parts[0], parts[1], odds, pop))
             cars_in_race.update(parts)
+        elif bet_type == "W":
+            try:
+                parts = [int(x) for x in kumi_ban.split("=")]
+            except ValueError:
+                continue
+            if len(parts) != 2:
+                continue
+            w_rows.append((parts[0], parts[1], odds, max_odds, pop))
+            cars_in_race.update(parts)
 
     if not cars_in_race:
         return []
@@ -122,22 +142,40 @@ def compute_race_features(race_key, rows) -> list[dict]:
         # SH2 contains car
         sh2_contains = [(o, p) for (a, b, o, p) in sh2_rows
                         if a == car or b == car]
+        # W contains car
+        w_contains = [(o_min, o_max, p) for (a, b, o_min, o_max, p) in w_rows
+                      if a == car or b == car]
 
+        # ST2/SH2 系
         imp_winprob_st2 = sum(1.0 / o for o, _ in st2_first) if st2_first else None
         imp_top2prob_sh2 = sum(1.0 / o for o, _ in sh2_contains) if sh2_contains else None
-
-        # min popularity (lower = more popular)
         pops_st2 = [p for _, p in st2_first if p is not None]
         pops_sh2 = [p for _, p in sh2_contains if p is not None]
         pop_rank_st2_1st = min(pops_st2) if pops_st2 else None
         pop_rank_sh2_min = min(pops_sh2) if pops_sh2 else None
-
         odds_min_st2_1st = min(o for o, _ in st2_first) if st2_first else None
         log_odds_min = math.log(odds_min_st2_1st) if odds_min_st2_1st else None
-
         n_st2_first = len(st2_first)
         is_incomplete_st2 = 1 if n_st2_first < expected_st2_first else 0
         has_odds = 1 if (st2_first or sh2_contains) else 0
+
+        # W 系
+        imp_top3prob_w = (
+            sum(1.0 / o_min for o_min, _, _ in w_contains if o_min)
+            if w_contains else None
+        )
+        pops_w = [p for _, _, p in w_contains if p is not None]
+        pop_rank_w_min = min(pops_w) if pops_w else None
+        w_odds_mins = [o_min for o_min, _, _ in w_contains if o_min]
+        w_odds_min_avg = (sum(w_odds_mins) / len(w_odds_mins)) if w_odds_mins else None
+        w_odds_ranges = [
+            (o_max - o_min) for o_min, o_max, _ in w_contains
+            if o_min and o_max
+        ]
+        w_odds_range_avg = (
+            sum(w_odds_ranges) / len(w_odds_ranges) if w_odds_ranges else None
+        )
+        has_w_odds = 1 if w_contains else 0
 
         features.append({
             "race_date": race_date,
@@ -153,6 +191,11 @@ def compute_race_features(race_key, rows) -> list[dict]:
             "n_st2_first": n_st2_first,
             "is_incomplete_st2": is_incomplete_st2,
             "has_odds": has_odds,
+            "imp_top3prob_w": imp_top3prob_w,
+            "pop_rank_w_min": pop_rank_w_min,
+            "w_odds_min_avg": w_odds_min_avg,
+            "w_odds_range_avg": w_odds_range_avg,
+            "has_w_odds": has_w_odds,
         })
 
     # レース内正規化 (sum=1)
@@ -160,11 +203,15 @@ def compute_race_features(race_key, rows) -> list[dict]:
                        if f["imp_winprob_st2"] is not None)
     total_imp_tp = sum(f["imp_top2prob_sh2"] for f in features
                        if f["imp_top2prob_sh2"] is not None)
+    total_imp_t3 = sum(f["imp_top3prob_w"] for f in features
+                       if f["imp_top3prob_w"] is not None)
     for f in features:
         if f["imp_winprob_st2"] is not None and total_imp_wp > 0:
             f["imp_winprob_st2"] = f["imp_winprob_st2"] / total_imp_wp
         if f["imp_top2prob_sh2"] is not None and total_imp_tp > 0:
             f["imp_top2prob_sh2"] = f["imp_top2prob_sh2"] / total_imp_tp
+        if f["imp_top3prob_w"] is not None and total_imp_t3 > 0:
+            f["imp_top3prob_w"] = f["imp_top3prob_w"] / total_imp_t3
 
     return features
 

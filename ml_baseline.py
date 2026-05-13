@@ -37,6 +37,17 @@ ODDS_NUM_FEATURES = [
     "n_st2_first", "is_incomplete_st2", "has_odds",
 ]
 
+# W (ワイド) odds 特徴量 (Phase 6 N2, 2026-05-13)
+# Codex 段階投入の第 2 段。y_top3 (3 着内予測) で効く可能性が高い。
+# W は kumi_ban に min/max odds の幅がある特殊形式。
+W_ODDS_NUM_FEATURES = [
+    "imp_top3prob_w",       # W contains-car の 3 着内圏 marginal (sum=1 normalized)
+    "pop_rank_w_min",       # W 含む組合せの min popularity
+    "w_odds_min_avg",       # W min odds の平均
+    "w_odds_range_avg",     # W (max - min) odds の平均 (不確実性指標)
+    "has_w_odds",           # W にこの車の組合せが存在するか
+]
+
 # 弱ライン特徴量 (Phase 6 6a-2)
 # 完全なライン復元は非推奨 (Codex feasibility 調査)。代わりに probabilistic な
 # 弱特徴量として LightGBM の重み調整に任せる。過去 5 年すべてに付与可能。
@@ -47,6 +58,20 @@ LINE_NUM_FEATURES = [
     "is_likely_tanki",
     "same_pref_support_count",
     "nige_propensity",
+]
+
+# 市場ミスプライシング特徴量 (Phase 6 N3, 2026-05-13)
+# Feature importance 分析でモデルが 80%+ 市場依存と判明。
+# 市場 vs 戦績の食い違いを明示的に特徴量化することで、市場非合理性に
+# モデルが「異議を唱える」余地を作る (Gemini 提案の方向性)。
+# use_odds=True 前提 (内部で pop_rank_st2_1st / imp_winprob_st2 を参照)。
+MISPRICING_NUM_FEATURES = [
+    "pop_minus_syouritu_rank",         # 正: 戦績の割に人気薄
+    "pop_minus_rentairitu2_rank",      # 連対率ベース
+    "pop_minus_heikin_tokuten_rank",   # 平均得点ベース
+    "imp_winprob_residual",            # 確率レベルの食い違い
+    "is_underpriced_stats_top",        # 穴目フラグ: 戦績上位 + 人気下位
+    "is_overpriced_market_top",        # 過熱フラグ: 人気上位 + 戦績下位
 ]
 
 TRAIN_END = "2024-12-31"  # 含む
@@ -202,7 +227,61 @@ def add_race_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def build_dataset(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
+def _add_mispricing_features(df: pd.DataFrame) -> pd.DataFrame:
+    """市場と戦績の食い違いを検出する派生特徴量を追加。
+
+    前提: build_dataset 内で odds_features merge 済 + add_race_features 済
+    (= pop_rank_st2_1st / imp_winprob_st2 / syouritu_rank 等が全部揃っている)。
+
+    注意: pop_rank_st2_1st は組合せレベル popularity (1〜72) なので、
+    そのままだと stats rank (1〜9) と比較できない。レース内で **車番レベル**の
+    rank に正規化 (pop_rank_car_in_race) してから差を取る。
+    """
+    keys = ["race_date", "place_code", "race_no"]
+    grp = df.groupby(keys, observed=True, sort=False)
+
+    # 車番レベル popularity rank (1〜n_cars、低い = 市場人気上位)
+    df["pop_rank_car_in_race"] = grp["pop_rank_st2_1st"].rank(
+        ascending=True, method="dense",
+    )
+
+    # rank diffs: 正 = 戦績の割に市場で人気薄 (穴目候補)
+    #             負 = 戦績の割に市場で人気 (過熱気味)
+    df["pop_minus_syouritu_rank"] = (
+        df["pop_rank_car_in_race"] - df["syouritu_rank"]
+    )
+    df["pop_minus_rentairitu2_rank"] = (
+        df["pop_rank_car_in_race"] - df["rentairitu2_rank"]
+    )
+    df["pop_minus_heikin_tokuten_rank"] = (
+        df["pop_rank_car_in_race"] - df["heikin_tokuten_rank"]
+    )
+
+    # 確率残差: imp_winprob - 戦績から推定した確率
+    # 戦績推定確率 = syouritu をレース内で正規化 (合計 1)
+    syouritu_sum = grp["syouritu"].transform("sum")
+    df["stats_implied_prob"] = df["syouritu"] / syouritu_sum.replace(0, 1)
+    df["imp_winprob_residual"] = (
+        df["imp_winprob_st2"] - df["stats_implied_prob"]
+    )
+
+    # フラグ: 穴目候補 (戦績 top2 + 市場 popularity 3 位以下)
+    df["is_underpriced_stats_top"] = (
+        (df["pop_rank_car_in_race"] >= 3) & (df["syouritu_rank"] <= 2)
+    ).astype(int)
+    # フラグ: 過熱気味 (市場 top2 + 戦績 5 位以下)
+    df["is_overpriced_market_top"] = (
+        (df["pop_rank_car_in_race"] <= 2) & (df["syouritu_rank"] >= 5)
+    ).astype(int)
+
+    n_under = df["is_underpriced_stats_top"].sum()
+    n_over = df["is_overpriced_market_top"].sum()
+    print(f"  mispricing flags: underpriced={n_under:,}, overpriced={n_over:,}")
+    return df
+
+
+def build_dataset(data: dict[str, pd.DataFrame],
+                  use_mispricing: bool = False) -> pd.DataFrame:
     """車番単位の DataFrame に特徴量とターゲットを結合。"""
     keys = ["race_date", "place_code", "race_no", "car_no"]
 
@@ -218,14 +297,21 @@ def build_dataset(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
 
     # オッズ特徴量を merge (use_odds=True で load_data が用意済)
     if "odds_features" in data:
+        # ODDS_NUM_FEATURES と W_ODDS_NUM_FEATURES の全列を一気に merge
+        # (use_w_odds は feat_cols 側で取捨選択する設計)
+        odds_cols_all = ODDS_NUM_FEATURES + W_ODDS_NUM_FEATURES
+        # 存在する列のみ抽出 (旧 odds_features.csv 互換)
+        present = [c for c in odds_cols_all
+                   if c in data["odds_features"].columns]
         df = df.merge(
-            data["odds_features"][keys + ODDS_NUM_FEATURES],
+            data["odds_features"][keys + present],
             on=keys, how="left",
         )
-        # has_odds / is_incomplete_st2 は flag 系なので欠損を 0 埋め
-        # 他の数値列は NaN のまま (LightGBM が欠損として扱う)
+        # flag 系を 0 埋め (NaN 残しはモデル側で困る)
         df["has_odds"] = df["has_odds"].fillna(0).astype(int)
         df["is_incomplete_st2"] = df["is_incomplete_st2"].fillna(1).astype(int)
+        if "has_w_odds" in df.columns:
+            df["has_w_odds"] = df["has_w_odds"].fillna(0).astype(int)
         n_with_odds = df["has_odds"].sum()
         print(f"  rows with odds features: {n_with_odds:,} / {len(df):,} "
               f"({n_with_odds / len(df):.1%})")
@@ -265,6 +351,13 @@ def build_dataset(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
 
     # v2: レース内相対化 + 集計特徴 (category 化前に行う)
     df = add_race_features(df)
+
+    # 市場ミスプライシング特徴 (use_mispricing=True かつ odds 必須)
+    # add_race_features の後で syouritu_rank 等が揃っているので、ここで計算
+    if use_mispricing:
+        if "odds_features" not in data:
+            raise ValueError("use_mispricing requires use_odds=True")
+        df = _add_mispricing_features(df)
 
     # カテゴリ列を category 型に (race-level 計算後に変換)
     for c in FEAT_CAT:
@@ -550,27 +643,44 @@ def main() -> None:
     ap.add_argument("--use-line", action="store_true",
                     help="弱ライン特徴量を追加 (line_features.csv を merge)。"
                          "Phase 6 6a-2 ライン構造の弱信号。")
+    ap.add_argument("--use-mispricing", action="store_true",
+                    help="市場ミスプライシング派生特徴量を追加 (要 --use-odds)。"
+                         "Phase 6 N3 市場 vs 戦績の食い違い検出。")
+    ap.add_argument("--use-w-odds", action="store_true",
+                    help="W (ワイド) odds 特徴量を追加 (要 --use-odds)。"
+                         "Phase 6 N2 段階投入の第 2 段。")
     args = ap.parse_args()
+
+    if args.use_mispricing and not args.use_odds:
+        ap.error("--use-mispricing requires --use-odds")
+    if args.use_w_odds and not args.use_odds:
+        ap.error("--use-w-odds requires --use-odds")
 
     t0 = time.time()
     print("=" * 70)
     print("ML Baseline: 4 targets + 5 ticket types backtest")
-    print(f"  use_odds = {args.use_odds}, use_line = {args.use_line}")
+    print(f"  use_odds = {args.use_odds}, use_w_odds = {args.use_w_odds}, "
+          f"use_line = {args.use_line}, "
+          f"use_mispricing = {args.use_mispricing}")
     print("=" * 70)
 
     print("\n[1/4] Loading data...")
     data = load_data(use_odds=args.use_odds, use_line=args.use_line)
 
     print("\n[2/4] Building dataset...")
-    df = build_dataset(data)
+    df = build_dataset(data, use_mispricing=args.use_mispricing)
     train, test = split_train_test(df)
 
     print("\n[3/4] Training models...")
     feat_cols = list(FEAT_NUM)
     if args.use_odds:
         feat_cols = feat_cols + ODDS_NUM_FEATURES
+    if args.use_w_odds:
+        feat_cols = feat_cols + W_ODDS_NUM_FEATURES
     if args.use_line:
         feat_cols = feat_cols + LINE_NUM_FEATURES
+    if args.use_mispricing:
+        feat_cols = feat_cols + MISPRICING_NUM_FEATURES
     feat_cols = feat_cols + FEAT_CAT
     preds = train_all_models(train, test, feat_cols=feat_cols)
 
@@ -582,8 +692,12 @@ def main() -> None:
     suffix_parts = []
     if args.use_odds:
         suffix_parts.append("odds")
+    if args.use_w_odds:
+        suffix_parts.append("w")
     if args.use_line:
         suffix_parts.append("line")
+    if args.use_mispricing:
+        suffix_parts.append("mp")
     suffix = f"_with_{'_'.join(suffix_parts)}" if suffix_parts else ""
     picks_out = DATA / f"ml_picks{suffix}.csv"
     picks.to_csv(picks_out, index=False)
