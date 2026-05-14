@@ -1,4 +1,4 @@
-"""5 分前 odds snapshot daemon (1 日 1 回起動、コンソール非表示)
+"""N 分前 odds snapshot daemon (1 日 1 回起動、コンソール非表示)
 
 毎分 cron の代替: 1 日に 1 回だけ pythonw で起動して、当日のレース全部を
 順次処理する。CMD ウィンドウは pythonw のため出ない (UX 改善)。
@@ -6,7 +6,9 @@
 設計:
 - 起動時に race_entries.csv から今日のレース一覧と st_time を読む
 - 取得済 (prerace_snapshot_log.csv の status=ok) は除外
-- 各レースについて snapshot 時刻 = st_time - 5 分 を計算
+- 各レースについて snapshot 時刻 = st_time - LEAD_MIN を計算
+  - LEAD_MIN は環境変数 KEIRIN_LEAD_MIN または CLI 引数 --lead-min で切替可
+  - デフォルト 5 分 (auto の実証値)、auto は 5/14 に 2 分に短縮した経緯あり
 - snapshot_at が 2 分以上前のレースは「乗り遅れ」扱いで skip
 - 残りを時刻順に処理:
     sleep until snapshot_at → capture → 次のレースへ
@@ -19,13 +21,18 @@
 諦める。
 
 使い方:
-  pythonw ingest_odds_prerace_daemon.py            # cron 経由 (隠れる)
-  python  ingest_odds_prerace_daemon.py            # 手動デバッグ (stdout 出る)
-  python  ingest_odds_prerace_daemon.py 2026-05-13 # 日付指定 (テスト)
+  pythonw ingest_odds_prerace_daemon.py                  # cron 経由 (5 分前 default)
+  python  ingest_odds_prerace_daemon.py                  # 手動デバッグ
+  python  ingest_odds_prerace_daemon.py --lead-min 3     # 3 分前で取得
+  python  ingest_odds_prerace_daemon.py --date 2026-05-16 --lead-min 2
+
+環境変数:
+  KEIRIN_LEAD_MIN=3 pythonw ingest_odds_prerace_daemon.py
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import logging
 import os
@@ -61,10 +68,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 設定
-SNAPSHOT_OFFSET_MIN = 5      # 発走 N 分前を狙う
-ENTRIES_RETRY_MAX = 10       # entries 未準備時の retry 回数
-ENTRIES_RETRY_INTERVAL = 300 # entries retry 待機 (秒) = 5 分
-MISS_TOLERANCE_MIN = 2       # snapshot_at がこの分数以上前なら乗り遅れ扱い
+SNAPSHOT_OFFSET_MIN_DEFAULT = 5  # 発走 N 分前を狙う (デフォルト)
+ENTRIES_RETRY_MAX = 10           # entries 未準備時の retry 回数
+ENTRIES_RETRY_INTERVAL = 300     # entries retry 待機 (秒) = 5 分
+MISS_TOLERANCE_MIN = 2           # snapshot_at がこの分数以上前なら乗り遅れ扱い
+
+
+def _resolve_lead_min(cli_value: int | None) -> int:
+    """LEAD_MIN を決定。優先順位: CLI > 環境変数 > default。"""
+    if cli_value is not None:
+        return cli_value
+    env_val = os.environ.get("KEIRIN_LEAD_MIN")
+    if env_val:
+        try:
+            return int(env_val)
+        except ValueError:
+            pass
+    return SNAPSHOT_OFFSET_MIN_DEFAULT
 
 
 def parse_st_time(race_date: str, st_time: str) -> datetime | None:
@@ -163,9 +183,22 @@ def capture_race(
 
 
 def main() -> None:
-    target_date = sys.argv[1] if len(sys.argv) > 1 else date.today().isoformat()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--date", "--target-date", dest="target_date", default=None,
+                    help="対象日 (YYYY-MM-DD)、デフォルトは today")
+    ap.add_argument("--lead-min", type=int, default=None,
+                    help="発走の何分前に snapshot を取るか (default 5、環境変数 "
+                         "KEIRIN_LEAD_MIN でも指定可)")
+    # 後方互換: 旧 `python daemon.py 2026-05-14` 形式の positional 引数も許容
+    ap.add_argument("positional_date", nargs="?", default=None, help=argparse.SUPPRESS)
+    args = ap.parse_args()
+
+    target_date = args.target_date or args.positional_date or date.today().isoformat()
+    lead_min = _resolve_lead_min(args.lead_min)
+
     logger.info("=" * 60)
-    logger.info("=== Daemon start: target_date=%s ===", target_date)
+    logger.info("=== Daemon start: target_date=%s, lead_min=%d 分前 ===",
+                target_date, lead_min)
     logger.info("=" * 60)
 
     # entries を最大 50 分 retry (朝 7:00 lines cron 失敗対策)
@@ -195,7 +228,7 @@ def main() -> None:
         st_dt = parse_st_time(race["race_date"], race["st_time"])
         if st_dt is None:
             continue
-        snapshot_at = st_dt - timedelta(minutes=SNAPSHOT_OFFSET_MIN)
+        snapshot_at = st_dt - timedelta(minutes=lead_min)
         schedule.append((race, st_dt, snapshot_at))
 
     schedule.sort(key=lambda x: x[2])
