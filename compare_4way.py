@@ -1,14 +1,17 @@
-"""4-way 比較: base / +line / +odds / +odds+line
+"""4-way 比較: production_no_odds / +line / final_odds_upper_bound / +odds+line
 
-Phase 6 6a-2 + 6a-3 統合検証。
-4 つのモデルを走らせ、AUC/ROI を比較して features の寄与度を可視化。
+⚠️ 用途分類 (2026-05-15 Phase 6 pivot 後):
+  PRODUCTION 候補: base (= production_no_odds), with_line (= base_line_shadow)
+  UPPER BOUND 研究: with_odds (= final_odds_upper_bound),
+                   with_odds_line (= final_odds_line_upper_bound)
+
+  upper bound 系は本番 EV 判定に使わない。市場の蒸留度合いを監査する目的。
+  本番 EV は race_odds_prerace.csv (live snapshot) を別途 lookup する。
+
+Phase 6 6a-2 + 6a-3 統合検証。4 つのモデルを走らせ、AUC/ROI を比較。
 
 出力: D:\\keirin-ai-data\\compare_4way_report.md
-
 走行時間: 各 run 約 3〜4 分、計 12-20 分
-
-⚠️ +odds 入りは race_odds.csv の post-start odds (リーケージあり) を使う
-upper-bound 性能。本番では再現不能。
 """
 
 from __future__ import annotations

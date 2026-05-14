@@ -107,18 +107,20 @@ CSV_SCHEMAS: dict[str, list[str]] = {
     ],
     # pre-start odds snapshot (発走 N 分前)。cron で本番運用向けに蓄積。
     # snapshot_dt は ローカル観測時刻、official_dt はソース側の表示時刻 (Codex/Gemini 指摘で分離)。
-    # minutes_before_start = (st_time - snapshot_dt) を分単位で記録 (整数)。
+    # minutes_before_start = (st_time - snapshot_dt) を分単位で記録 (整数、実測値)。
+    # target_offset_min = 狙った N (5/3/2 など、Codex 5/15 提案で追加)。
     "race_odds_prerace.csv": [
         "race_date", "place_code", "race_no",
         "bet_type", "kumi_ban", "odds", "max_odds",
         "popularity", "official_dt",
-        "snapshot_dt", "minutes_before_start",
+        "snapshot_dt", "minutes_before_start", "target_offset_min",
     ],
     # prerace snapshot 取得試行ログ (成功/失敗、リトライ管理用)。
     # status: ok / no_odds / fail
+    # target_offset_min で 5/3/2 分前 snapshot を識別 (dedup キーにも含む)。
     "prerace_snapshot_log.csv": [
         "race_date", "place_code", "race_no",
-        "st_time", "snapshot_dt", "minutes_before_start",
+        "st_time", "snapshot_dt", "minutes_before_start", "target_offset_min",
         "status", "n_rows", "note",
     ],
 }

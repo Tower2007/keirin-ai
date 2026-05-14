@@ -141,6 +141,25 @@ schtasks /create /tn "keirin-ai-lines" /sc daily /st 07:00 ^
   `sys.stdout.reconfigure(encoding='utf-8')` を呼ぶ）
 - 全角→半角は parser で NFKC 正規化（「Ｓ級一般」→「S級一般」）
 
+## ML モデルの用途分類 (Phase 6 pivot 2026-05-15)
+
+`ml_baseline.py` で生成される各構成は **本番候補** と **研究用** に分かれる:
+
+| フラグ | 用途分類 | 本番判定使用可? |
+|---|---|---|
+| なし | `production_no_odds` (**本線**) | ✅ |
+| `--use-line` | `base_line_shadow` (shadow 候補) | △ live n≥50 で判定 |
+| `--use-odds` | `final_odds_upper_bound` | ❌ 研究のみ |
+| `--use-odds --use-w-odds` | `final_odds_w_upper_bound` | ❌ 研究のみ |
+| `--use-odds --use-line` | `final_odds_line_upper_bound` | ❌ 研究のみ |
+| `--use-odds --use-mispricing` | `final_odds_mp_upper_bound` (5/13 失敗確認) | ❌ |
+
+**本番 EV 計算**: `production_no_odds` のモデル予測 × `race_odds_prerace.csv` の
+live snapshot odds を使う (Codex 5/15 設計)。`race_odds.csv` の post-start odds
+を特徴に入れたモデルは drift で使えないため。
+
+詳細: `Opinion/multi_model/proposal.md` 参照
+
 ## Phase ロードマップ
 
 - ✅ **Phase 1**: 開催メタ・出走表・ライン情報 → CSV

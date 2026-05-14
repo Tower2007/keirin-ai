@@ -6,8 +6,25 @@
 特徴量: race_entries (脚質・予想印) + race_stats (戦績) + race_meta (グレード)
 バックテスト: 二車複(SH2)/二車単(ST2)/三連複(RH3)/三連単(RT3)/ワイド(W)
 
+⚠️ Phase 6 用途分類 (2026-05-15 Codex 提案、命名は将来 rename 予定):
+
+  PRODUCTION (本番候補):
+    - flag 無し           = production_no_odds (本線、market 非依存)
+    - --use-line          = base_line_shadow (弱ライン特徴量、shadow 候補)
+
+  DIAGNOSTIC / UPPER BOUND (研究・市場監査用、本番投票判定に使わない):
+    - --use-odds          = final_odds_upper_bound (市場の蒸留 upper bound)
+    - --use-odds --use-w  = final_odds_w_upper_bound (W 追加 upper bound)
+    - --use-odds --use-line = final_odds_line_upper_bound
+    - --use-odds --use-mp = final_odds_mp_upper_bound (mispricing、5/13 失敗確認済)
+
+  理由: race_odds.csv の official_dt は発走後 0〜5 分 = 本番では観測不可。
+  本番 EV 計算は live snapshot (race_odds_prerace.csv) を別途使う。
+
 使い方:
-  python ml_baseline.py
+  python ml_baseline.py                          # production_no_odds (本線)
+  python ml_baseline.py --use-odds               # final_odds_upper_bound (研究用)
+  python ml_baseline.py --use-line               # base_line_shadow (shadow 候補)
 """
 
 from __future__ import annotations
