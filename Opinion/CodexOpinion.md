@@ -7,6 +7,206 @@ Codex の意見・所感を追記式で蓄積する。
 
 ---
 
+## 2026-05-15: 多モデル化 + odds 降格 + snapshot timing 設計レビュー
+
+依頼書: `Opinion/codex_briefs/2026-05-15_multi_model_and_odds_demotion.md`
+
+Gemini 5/15 エントリ、ClaudeFeedback の pivot 記録、`ml_baseline.py`、`ingest_odds_prerace_daemon.py`、`D:\keirin-ai-data\w_odds_compare_report.md`、`feature_importance_report.md` を確認した。詳細な設計メモは `Opinion/multi_model/proposal.md` に置いた。
+
+結論: Phase 6 pivot は妥当。`no_odds_model + odds_for_EV_only` を本番主軸に格上げし、`with_odds*` は upper-bound/shadow へ降格でよい。ただし「多モデル化」は即フル実装ではなく、まず production の命名・評価レイヤを切り分け、live snapshot が n=30〜50 貯まってから v2 に進むのが安全。
+
+### Q1. `no_odds_model + odds_for_EV_only` を本番主軸にする妥当性
+
+賛成。理由はシンプルで、予測モデルと市場価格を分離しないと drift の原因分析ができないから。
+
+`with_odds` の y_win AUC 0.850、`no_odds` の y_win AUC 0.811 という差は大きいが、これは `feature_importance_report.md` の通り `imp_winprob_st2` が y_win gain の 81.83% を占める「市場の蒸留」で得た差。final-like odds を特徴として入れたモデルは、実運用では「5分前/3分前/2分前の市場」を「発走直後/最終市場」の代替として食わせることになり、入力分布そのものが変わる。
+
+本番主軸は以下の切り分けがよい。
+
+```text
+production_no_odds:
+  学習入力: race_entries + race_stats + race_meta + optional weak_line
+  odds入力: なし
+  用途: 選手能力/レース構造の自力予測
+
+ev_layer:
+  入力: production_no_odds の予測 + race_odds_prerace.csv の live snapshot
+  用途: 購入判定、threshold crossing、drift 監視
+```
+
+市場が読んでいる当然の情報を捨てる懸念はある。ただし、それは EV layer で live odds として再導入すればよい。モデル内に odds を入れると「市場が読んでいる情報」と「モデルが読んでいる情報」が混ざり、どこで edge が出たのか追えなくなる。本番運用では、予測器は市場非依存、購入判定は市場依存、という責務分離を優先すべき。
+
+実装上の呼称も固定したい。`no_odds` を単なる baseline ではなく `production_no_odds` と呼び、`with_odds` は `shadow_final_odds` / `upper_bound_final_odds` と名前から用途を明示する。
+
+### Q2. odds 入りモデルの upper-bound / shadow 降格
+
+降格判断に賛成。対象は `with_odds`, `with_odds_w`, `with_odds_line`, `with_odds_mp` の全て。これらは研究価値はあるが、production pick の根拠にしない。
+
+ただし「本線は何のフラグもない素の baseline で良いか?」には少しだけ補足したい。弱ライン特徴は 5/13 検証では gain 1% 未満で強くないが、drift しない非 odds 特徴なので、production 候補から完全排除する必要はない。推奨は二段階。
+
+```text
+production_v0 = base
+production_v0_line_shadow = base + weak_line
+```
+
+まずは `base` を canonical として固定し、`weak_line` は shadow。live n>=50 で `base` と `base+weak_line` の drift 後 ROI/的中率を比較して採否を決める。過去 final odds の top5% ROI だけで採用しない。
+
+レポート出力も以下のように分けると混乱が減る。
+
+```text
+Production candidates:
+  base
+  base_line_shadow
+
+Diagnostics only:
+  final_odds_upper_bound
+  final_odds_w_upper_bound
+  final_odds_line_upper_bound
+  final_odds_mp_upper_bound
+```
+
+### Q3. 順序系/非順序系の多モデル分離
+
+方向性は賛成。ただし「2つの LightGBM モデル」にいきなり分けるより、まず `target -> feature_set` を分離できる設計へリファクタするのがよい。現 `ml_baseline.py` は `train_all_models()` が全ターゲットに同じ `feat_cols` を渡す構造なので、最小改修はここ。
+
+擬似コード:
+
+```python
+FEATURE_SETS = {
+    "production_base": BASE_NUM + BASE_CAT,
+    "order_shadow": BASE_NUM + BASE_CAT,  # production では odds なし
+    "place_shadow": BASE_NUM + BASE_CAT,
+    "order_final_odds_upper": BASE + ST2_ODDS,  # W は入れない
+    "place_final_odds_upper": BASE + SH2_ODDS + W_ODDS,
+}
+
+TARGET_SPECS = {
+    "y_win":  {"family": "order", "features": "order_shadow"},
+    "y_rank": {"family": "order", "features": "order_shadow"},
+    "y_top2": {"family": "place", "features": "place_shadow"},
+    "y_top3": {"family": "place", "features": "place_shadow"},
+}
+```
+
+最初の production は、モデルオブジェクトとしては従来通り 4 target でよい。ただし feature list を target 別に渡せるようにしておく。次の段階で以下に分ける。
+
+```text
+Order family:
+  targets: y_win, y_rank
+  用途: ST2, RT3 の1着/順序生成
+  odds shadow: ST2系のみ。Wは入れない。
+
+Place family:
+  targets: y_top2, y_top3
+  用途: SH2, RH3, W の組合せ生成
+  odds shadow: SH2 + W を許可。
+```
+
+券種生成も family を分ける。
+
+```python
+ST2:
+    first = argmax(order.p_win)
+    second = argmax(place.p_top2 excluding first)
+
+RT3:
+    first = argmax(order.p_win)
+    second = argmax(place.p_top2 excluding first)
+    third = argmax(place.p_top3 excluding first/second)
+
+SH2:
+    top2 = top2 by place.p_top2
+
+RH3/W:
+    top3 = top3 by place.p_top3
+```
+
+ここで重要なのは、RT3 を `p_win` 上位3台だけで作る現行 `make_picks()` より、2/3着を place family から取る方が自然なこと。三連単は「1着候補」と「ヒモ候補」を分けた方がよい。これは Gemini の boat 知見と整合する。
+
+### Q4. W 追加で三連単悪化の細部解釈
+
+仮説は概ね妥当。W は「3着以内に入るか」の marginal 情報であって、「1-2-3 の順序」をほぼ持たない。`w_odds_compare_report.md` でも、y_top3 AUC は +0.005 改善し、三連複/ワイドの top5/top10 ROI は改善。一方で三連単 top10 ROI は -0.0488 と大きく悪化している。
+
+ただし、細部は「y_top2/y_top3 に過剰最適化されたから y_win が劣化した」と断定するより、次のように見る方が正確。
+
+1. W は top3 membership を強くする。
+2. 現 `make_picks()` の RT3 は `p_win` 順上位3台をそのまま `1-2-3` にする。
+3. W 追加で `y_top3` / `y_rank` の順位付けが改善しても、RT3 に必要な条件付き順序、特に「2着/3着の入れ替わり」や「番手差しの1着」は改善しない。
+4. その結果、三連複は当たりやすくなるが、三連単の並びは崩れうる。
+
+feature importance で確認すべき兆候:
+
+```text
+with_odds_w の target 別 importance を出す。
+期待される整合パターン:
+  W系特徴 gain: y_top3/y_rank で高い
+  W系特徴 gain: y_win で低い
+  ST2系特徴 gain: y_win で高い
+```
+
+現 `feature_importance_report.md` は `with_odds_line` のものなので、W 系の importance はまだ見えていない。これは次に `analyze_feature_importance.py --use-odds --use-w-odds` 相当で再出力する価値がある。加えて、RT3 悪化の直接検証として、W 追加前後で「実際の1着車の `p_win` rank」が top10% selected races で悪化していないかを見るとよい。
+
+### Q5. 5分/3分/2分 snapshot 比較設計
+
+現 `ingest_odds_prerace_daemon.py` は既に `--lead-min` と `KEIRIN_LEAD_MIN` に対応している。これは単一 timing 運用には十分。ただし 5/3/2 の比較実験には足りない。現状の `load_captured()` は `(race_date, place_code, race_no)` 単位で status=ok を既取得扱いにするため、同じレースで5分前を取ると3分前/2分前は skip される。
+
+推奨は設計案 B の改良版、つまり「1 daemon で複数 offset を同時スケジュール」。
+
+```text
+CLI:
+  --lead-min 3          # 本番単一運用
+  --lead-mins 5,3,2     # 比較蓄積モード
+
+保存列:
+  target_offset_min     # 狙った offset: 5/3/2
+  minutes_before_start  # 実測 offset
+
+既取得キー:
+  (race_date, place_code, race_no, target_offset_min)
+```
+
+`race_odds_prerace.csv` と `prerace_snapshot_log.csv` に `target_offset_min` を足すのが望ましい。`minutes_before_start` は sleep ズレや取得遅延後の実測値なので、狙い値とは分けるべき。
+
+案 C の cron 3本並列は避けたい。理由は、同時刻付近で同一レース/APIにアクセスし、ログ競合・重複判定・netkeirin負荷が増えるから。案 A の単一切替は運用には良いが、比較データが同日同条件で揃わない。したがって、蓄積期間は B'、本番移行後は A がよい。
+
+比較開始は n=30 からでよいが、n の定義を「snapshot 行数」ではなく「BUY 判定候補が発生したレース数」に寄せたい。最低限は:
+
+```text
+offset別:
+  n_ok_races
+  n_selected
+  threshold_cross_down_rate = live EV >= thr かつ final EV < thr
+  threshold_cross_up_rate   = live EV < thr かつ final EV >= thr
+  live_ev_mean / final_ev_mean / drift_mean
+  selected ROI
+```
+
+auto は現状 `LEAD_MIN=2` 単一値運用で、`odds_snapshots.csv` には `captured_at` が残る。過去の5分前データは「当時の snapshot」としては残るが、同一レースで 5/3/2 を並列比較する設計ではない。keirin は今から設計するなら、`target_offset_min` を持たせて並列比較可能にした方が後で強い。
+
+### 追加の見落とし候補
+
+1. EV 計算は券種ごとに確率校正が必要。`p_win`, `p_top2`, `p_top3` の AUC が良くても、`p * odds` で使うには calibration が重要。production では isotonic / Platt / bin calibration のいずれかを入れたい。
+
+2. RT3 は当面 production BUY から外し、shadow にした方がよい。W 追加で三連単が悪化しただけでなく、RT3 は確率推定誤差と odds drift の両方に最も弱い。
+
+3. `with_odds*` の実験自体は止めなくてよい。ただし目的は「本番候補」ではなく「市場が何を読んでいるかの監査」。レポート名と見出しに必ず `final_odds_upper_bound` を入れる。
+
+4. `line` は production 本線に即採用しない。前回検証どおり弱いので、`base_line_shadow` として drift 後に採否判断する。
+
+実装優先度:
+
+```text
+P0: production_no_odds / final_odds_upper_bound の命名整理
+P1: snapshot schema に target_offset_min を追加する設計
+P2: weekly drift report skeleton
+P3: target別 feature_set を受けられる train_all_models へ小改修
+P4: order/place family の shadow 評価
+```
+
+総評: Gemini の pivot は大枠で正しい。ただし多モデル化を急いで大改修するより、まず「odds を特徴から降格」「snapshot timing を比較可能にする」「drift report に集約」の3点を固めるのが先。モデルの腕力より、観測設計を壊さないことが今は一番大事。
+
+---
+
 ## 2026-05-12: 過去ライン逆引きバックフィル feasibility
 
 依頼書: `Opinion/codex_briefs/2026-05-12_line_reconstruction_feasibility.md`
