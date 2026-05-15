@@ -82,6 +82,22 @@ schtasks /create /tn "keirin-ai-prerace-daemon" /sc daily /st 08:00 ^
 
 **必ず朝に lines を取得**: PJ0305 の nInfo は完了後に空になるため。
 
+### ⚠️ JSJ048 朝の前日問題 (2026-05-16 発見・修正済)
+JSJ048「今日のレース一覧」は **朝 7:00 時点ではまだ前日分**を返す
+(実測: 5/16 07:52 で前日 kaisaiDate、08:04 で当日に切替)。
+
+このため `kaisaiDate == today` フィルタが空になり、5/13〜5/16 の lines を
+**4 日連続で取り逃した** (results cron は明示日付なので正常、competed=6〜8/日。
+"開催なし" は完全な誤判定だった)。5/13〜5/15 のラインは PJ0305 制約で永久ロスト。
+
+**修正**: `ingest_today_lines.py` に JSJ048 retry を追加 (引数なし=cron 時のみ、
+最大 12 回 × 300 秒 = 60 分、当日 kaisaiDate が出るまで粘る)。手動で日付指定
+した場合は retry しない。環境変数 `KEIRIN_LINES_RETRY_MAX` /
+`KEIRIN_LINES_RETRY_SEC` で調整可。
+
+教訓 (AGENTS.md にも記載): **センセーショナルな結果 (1 週間開催ゼロ等) が出たら
+まず測定スクリプトのバグを疑う**。results cron との突合で即座にバグと判明した。
+
 ### Windows タスクスケジューラ登録例
 ```cmd
 schtasks /create /tn "keirin-ai-lines" /sc daily /st 07:00 ^

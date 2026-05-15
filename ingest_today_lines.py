@@ -15,7 +15,9 @@ Windows タスクスケジューラ登録例 (毎朝 7:00):
   schtasks /create /tn "keirin-ai-lines" /tr "python C:\Users\user\Claude-Project\keirin-ai\ingest_today_lines.py" /sc daily /st 07:00
 """
 
+import os
 import sys
+import time
 import logging
 from datetime import date
 
@@ -28,26 +30,62 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# JSJ048 の "今日のレース一覧" は朝 7:00 時点ではまだ前日分を返す
+# (実測: 5/16 07:52 で前日、08:04 で当日に切替)。
+# 当日 kaisaiDate が出るまでリトライする (daemon と同じ思想)。
+# 環境変数で無効化/調整可。手動デバッグ時は retry 不要なので 0 回も可。
+JSJ048_RETRY_MAX = int(os.environ.get("KEIRIN_LINES_RETRY_MAX", "12"))
+JSJ048_RETRY_INTERVAL = int(os.environ.get("KEIRIN_LINES_RETRY_SEC", "300"))
 
-def main() -> None:
-    target_date = sys.argv[1] if len(sys.argv) > 1 else date.today().isoformat()
-    client = KeirinClient()
 
-    # JSJ048 で当日開催中の場リストを取得
-    try:
-        j048 = client.get_today_race_list()
-    except Exception as e:
-        logger.error("JSJ048 failed: %s", e)
-        sys.exit(1)
-
-    venues_today = sorted({
+def _fetch_open_venues(client: KeirinClient, target_date: str) -> list[int]:
+    """JSJ048 から target_date 開催の場コード一覧を取得。"""
+    j048 = client.get_today_race_list()
+    return sorted({
         int(r["naibuKeirinCd"])
         for r in j048.get("RaceList", [])
         if r.get("kaisaiDate", "").replace("-", "") == target_date.replace("-", "")
     })
 
+
+def main() -> None:
+    target_date = sys.argv[1] if len(sys.argv) > 1 else date.today().isoformat()
+    client = KeirinClient()
+
+    # 手動で日付指定した場合 (デバッグ) は retry しない。
+    # cron (引数なし = today) のときだけ JSJ048 切替待ち retry を有効化。
+    is_today_cron = len(sys.argv) <= 1
+    retry_max = JSJ048_RETRY_MAX if is_today_cron else 1
+
+    venues_today: list[int] = []
+    for attempt in range(1, retry_max + 1):
+        try:
+            venues_today = _fetch_open_venues(client, target_date)
+        except Exception as e:
+            logger.error("JSJ048 failed (attempt %d/%d): %s",
+                         attempt, retry_max, e)
+            venues_today = []
+
+        if venues_today:
+            if attempt > 1:
+                logger.info("JSJ048 returned %s venues on attempt %d",
+                            len(venues_today), attempt)
+            break
+
+        if attempt < retry_max:
+            logger.info(
+                "JSJ048 not showing %s yet (attempt %d/%d). "
+                "朝は前日分が返るため %ds 待って retry",
+                target_date, attempt, retry_max, JSJ048_RETRY_INTERVAL,
+            )
+            time.sleep(JSJ048_RETRY_INTERVAL)
+
     if not venues_today:
-        logger.info("No venues open on %s", target_date)
+        logger.info(
+            "No venues open on %s after %d attempts "
+            "(本当に開催なし、または JSJ048 異常)",
+            target_date, retry_max,
+        )
         return
 
     logger.info("=== Lines ingest: %s ===", target_date)

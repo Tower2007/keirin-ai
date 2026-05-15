@@ -7,6 +7,59 @@ Claude (実装担当 AI) の意見・所感を追記式で蓄積する。
 
 ---
 
+## 2026-05-16: 🔴 重大バグ発見 — lines cron が 4 日連続取り逃し
+
+### 発覚の経緯
+ユーザーが「データ収集継続してる? タイミングは?」と質問。確認したところ
+5/13〜5/16 が全て「No venues open」= 4 日連続開催ゼロ表示。競輪が 1 週間
+開催ゼロは通常ありえない → 測定スクリプトのバグを疑い調査。
+
+### 根本原因
+JSJ048「今日のレース一覧」は **朝 7:00 時点ではまだ前日分**を返す:
+- 5/16 07:52 に叩く → kaisaiDate=20260515 (前日、8 場)
+- 5/16 08:04 に叩く → kaisaiDate=20260516 (当日、6 場) に切替
+
+`ingest_today_lines.py` の `kaisaiDate == today` フィルタが朝 7:00 で空になり
+"No venues open" を誤出力 → race_entries 書かれず → daemon が snapshot 0 件。
+
+### 被害の確定 (results cron との突合で判明)
+results cron は明示日付指定なので正常動作していた:
+| 日 | 実際の開催 | lines cron 判定 |
+|---|---|---|
+| 5/13 | 7 場 (completed=7) | ❌ "No venues open" |
+| 5/14 | 6 場 (completed=6) | ❌ "No venues open" |
+| 5/15 | 8 場 (completed=8) | ❌ "No venues open" |
+| 5/16 | 6 場 | ❌ → **手動救出成功** |
+
+- **5/13〜5/15 のライン/出走表は永久ロスト** (PJ0305 nInfo は完了後空)
+- snapshot 蓄積が完全停止していた (Phase 6 の根幹が動いてなかった)
+- backfill 期間中 (〜5/3) と results は無事、被害は lines/entries/snapshot のみ
+
+### 対応
+1. **即時**: 5/16 08:04 に手動 `ingest_today_lines.py` 実行 → 6 場 442 entries 救出
+2. daemon の retry ロジック (50 分粘る) が自動的に 08:05 で entries 検出 →
+   126 captures (42 races × 5/3/2 offset) スケジュール成功
+3. **恒久修正**: `ingest_today_lines.py` に JSJ048 retry 追加
+   - cron 時 (引数なし) のみ最大 12 回 × 300 秒 = 60 分 retry
+   - 当日 kaisaiDate が出るまで粘る (daemon と同じ思想)
+   - 手動日付指定時は retry しない
+   - 環境変数 KEIRIN_LINES_RETRY_MAX / KEIRIN_LINES_RETRY_SEC で調整可
+
+### 教訓
+- **AGENTS.md / CLAUDE.md の「センセーショナルな結果は測定バグを疑う」が的中**
+- results (明示日付) と lines (JSJ048 today 依存) の二重系があったから即検証できた
+- 「No venues open」を 4 日も見逃した = ログ監視の甘さ。weekly_drift_report の
+  「未蓄積」アラートをもっと早く確認すべきだった
+- 観測基盤を作っても、その上流 (lines 取得) が壊れていたら無意味。
+  Gemini の「観測基盤こそ最優先」がより重い意味を持つ
+
+### Phase 6 への影響
+- 蓄積開始が実質 5/16 から (5/13〜5/15 のロスは取り返せない)
+- n=30/n=50 到達が当初想定より 3 日遅れ
+- 5/16 から正常蓄積開始、daemon は 5/3/2 offset で 126 captures/日ペース
+
+---
+
 ## 2026-05-15: Gemini 中盤レビュー受領 → Phase 6 方針 PIVOT
 
 ### Gemini からの衝撃的な指摘
