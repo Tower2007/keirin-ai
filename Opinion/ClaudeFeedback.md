@@ -31,9 +31,16 @@ results cron は明示日付指定なので正常動作していた:
 | 5/15 | 8 場 (completed=8) | ❌ "No venues open" |
 | 5/16 | 6 場 | ❌ → **手動救出成功** |
 
-- **5/13〜5/15 のライン/出走表は永久ロスト** (PJ0305 nInfo は完了後空)
-- snapshot 蓄積が完全停止していた (Phase 6 の根幹が動いてなかった)
-- backfill 期間中 (〜5/3) と results は無事、被害は lines/entries/snapshot のみ
+- **訂正 (重要)**: 当初「5/13〜5/15 の出走表も永久ロスト」と書いたが**誤り**。
+  results cron (翌朝 5:00、明示日付の ingest_yesterday.py) が
+  entries/stats/results を全て救済済。実データ確認で 5/13〜5/15 の
+  race_entries/race_stats/race_results は**完備**。
+- **実際にロストしたのは 2 つだけ**:
+  1. race_lines (narabi_x/y) 5/13〜5/15 — ただし Codex feasibility で低価値判定済、
+     弱ライン特徴量は race_lines.csv を使わない (entries.kyaku+stats から計算) → 影響軽微
+  2. pre-start odds snapshot 5/13〜5/15 — **これが唯一の実害** (3 日分の蓄積遅れ)
+- ML 本線データ (production_no_odds) は**完全無傷**
+- backfill 期間中 (〜5/3) と results も無事
 
 ### 対応
 1. **即時**: 5/16 08:04 に手動 `ingest_today_lines.py` 実行 → 6 場 442 entries 救出
@@ -53,9 +60,10 @@ results cron は明示日付指定なので正常動作していた:
 - 観測基盤を作っても、その上流 (lines 取得) が壊れていたら無意味。
   Gemini の「観測基盤こそ最優先」がより重い意味を持つ
 
-### Phase 6 への影響
-- 蓄積開始が実質 5/16 から (5/13〜5/15 のロスは取り返せない)
-- n=30/n=50 到達が当初想定より 3 日遅れ
+### Phase 6 への影響 (訂正版)
+- 実害は **pre-start odds snapshot が 3 日分 (5/13〜5/15) 遅れた**のみ
+- ML 本線データ (entries/stats/results) は無傷 → production モデルは影響なし
+- n=30/n=50 到達が当初想定より 3 日遅れ程度、致命的ではない
 - 5/16 から正常蓄積開始、daemon は 5/3/2 offset で 126 captures/日ペース
 
 ---

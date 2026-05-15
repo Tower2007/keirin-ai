@@ -88,7 +88,12 @@ JSJ048「今日のレース一覧」は **朝 7:00 時点ではまだ前日分**
 
 このため `kaisaiDate == today` フィルタが空になり、5/13〜5/16 の lines を
 **4 日連続で取り逃した** (results cron は明示日付なので正常、competed=6〜8/日。
-"開催なし" は完全な誤判定だった)。5/13〜5/15 のラインは PJ0305 制約で永久ロスト。
+"開催なし" は完全な誤判定だった)。
+
+**実害は限定的**: results cron (翌朝 5:00 明示日付) が entries/stats/results を
+全て救済済。永久ロストは ① race_lines narabi 5/13〜15 (低価値、弱ライン特徴量は
+未使用)、② pre-start odds snapshot 5/13〜15 (3 日分の蓄積遅れ) のみ。
+ML 本線データは無傷。
 
 **修正**: `ingest_today_lines.py` に JSJ048 retry を追加 (引数なし=cron 時のみ、
 最大 12 回 × 300 秒 = 60 分、当日 kaisaiDate が出るまで粘る)。手動で日付指定
