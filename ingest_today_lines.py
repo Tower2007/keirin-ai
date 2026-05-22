@@ -1,27 +1,32 @@
-r"""今日開催の全場の出走表 + ライン情報を取得 (cron 朝実行用)
+r"""当日開催の全場 lines/entries/stats を回収 (cron 朝実行用)
 
-PJ0305 の nInfo (ライン情報) はレース完了後に空になるため、
-レース開始前に取得する必要がある。
+旧設計 (5/16 まで): JSJ048「今日のレース一覧」で開催場を取得 → ループ。
+   → JSJ048 が朝 7:00 時点で前日を返すバグがあり、retry 60 分でも不足する日があった。
+   → 5/17〜5/22 の 6 日連続 snapshot 蓄積失敗 (2026-05-23 発覚)。
 
-朝早めに実行して race_lines.csv に蓄積。
-ingest_day.py が差分取り込み対応のため、夕方に同じ venue-day を再実行すれば
-結果+払戻だけが追加される。
+新設計 (5/23 以降): JSJ048 撤廃、全 43 場 raceprogram (PC0201) 直叩き。
+   - 明示日付クエリなので「前日返し」問題が発生しない
+   - 開催無しの場は PC0201 空で瞬時に no_race として 0.8 秒で抜ける
+   - 全 43 場ループしても 1〜3 分で完走 (ingest_yesterday.py と同じパターン)
+
+results/payouts は当日にはまだ無いため、ingest_one_day 内部で
+"No finished races (skip results/payouts)" として skip される。
 
 使い方:
-  python ingest_today_lines.py          # 今日の全開催場
-  python ingest_today_lines.py 2026-04-26  # 日付指定 (デバッグ用)
+  python ingest_today_lines.py             # 当日の全43場ループ
+  python ingest_today_lines.py 2026-05-23  # 日付指定 (デバッグ用)
 
 Windows タスクスケジューラ登録例 (毎朝 7:00):
-  schtasks /create /tn "keirin-ai-lines" /tr "python C:\Users\user\Claude-Project\keirin-ai\ingest_today_lines.py" /sc daily /st 07:00
+  schtasks /create /tn "keirin-ai-lines" /sc daily /st 07:00 ^
+    /tr "C:\Users\no28a\Claude-project\keirin-ai\scripts\cron_lines.bat"
 """
 
-import os
 import sys
-import time
 import logging
 from datetime import date
 
 from src.client import KeirinClient, VENUE_CODES
+from src.storage import RaceDayIndex
 from ingest_day import ingest_one_day
 
 logging.basicConfig(
@@ -30,77 +35,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# JSJ048 の "今日のレース一覧" は朝 7:00 時点ではまだ前日分を返す
-# (実測: 5/16 07:52 で前日、08:04 で当日に切替)。
-# 当日 kaisaiDate が出るまでリトライする (daemon と同じ思想)。
-# 環境変数で無効化/調整可。手動デバッグ時は retry 不要なので 0 回も可。
-JSJ048_RETRY_MAX = int(os.environ.get("KEIRIN_LINES_RETRY_MAX", "12"))
-JSJ048_RETRY_INTERVAL = int(os.environ.get("KEIRIN_LINES_RETRY_SEC", "300"))
-
-
-def _fetch_open_venues(client: KeirinClient, target_date: str) -> list[int]:
-    """JSJ048 から target_date 開催の場コード一覧を取得。"""
-    j048 = client.get_today_race_list()
-    return sorted({
-        int(r["naibuKeirinCd"])
-        for r in j048.get("RaceList", [])
-        if r.get("kaisaiDate", "").replace("-", "") == target_date.replace("-", "")
-    })
-
 
 def main() -> None:
     target_date = sys.argv[1] if len(sys.argv) > 1 else date.today().isoformat()
+
     client = KeirinClient()
+    index = RaceDayIndex()
+    logger.info("=== Today lines ingest: %s ===", target_date)
+    logger.info("  Index sizes: %s", index.sizes())
 
-    # 手動で日付指定した場合 (デバッグ) は retry しない。
-    # cron (引数なし = today) のときだけ JSJ048 切替待ち retry を有効化。
-    is_today_cron = len(sys.argv) <= 1
-    retry_max = JSJ048_RETRY_MAX if is_today_cron else 1
-
-    venues_today: list[int] = []
-    for attempt in range(1, retry_max + 1):
+    summary = {"completed": 0, "no_race": 0, "skipped": 0, "errors": 0}
+    for pc in sorted(VENUE_CODES):
         try:
-            venues_today = _fetch_open_venues(client, target_date)
-        except Exception as e:
-            logger.error("JSJ048 failed (attempt %d/%d): %s",
-                         attempt, retry_max, e)
-            venues_today = []
-
-        if venues_today:
-            if attempt > 1:
-                logger.info("JSJ048 returned %s venues on attempt %d",
-                            len(venues_today), attempt)
-            break
-
-        if attempt < retry_max:
-            logger.info(
-                "JSJ048 not showing %s yet (attempt %d/%d). "
-                "朝は前日分が返るため %ds 待って retry",
-                target_date, attempt, retry_max, JSJ048_RETRY_INTERVAL,
-            )
-            time.sleep(JSJ048_RETRY_INTERVAL)
-
-    if not venues_today:
-        logger.info(
-            "No venues open on %s after %d attempts "
-            "(本当に開催なし、または JSJ048 異常)",
-            target_date, retry_max,
-        )
-        return
-
-    logger.info("=== Lines ingest: %s ===", target_date)
-    logger.info("  Open venues today: %d -> %s",
-                len(venues_today),
-                [f"{pc}({VENUE_CODES.get(pc,'?')})" for pc in venues_today])
-
-    summary = {"ingested": 0, "skipped": 0, "errors": 0}
-    for pc in venues_today:
-        try:
-            counts = ingest_one_day(client, pc, target_date)
+            counts = ingest_one_day(client, pc, target_date, index=index)
             if counts.get("skipped"):
                 summary["skipped"] += 1
+            elif not counts:
+                summary["no_race"] += 1
             else:
-                summary["ingested"] += 1
+                summary["completed"] += 1
         except Exception as e:
             logger.error("FAILED %s venue=%d: %s", target_date, pc, e)
             summary["errors"] += 1
@@ -109,9 +62,14 @@ def main() -> None:
             except Exception:
                 pass
 
-    logger.info("=== Lines ingest summary ===")
-    logger.info("  Ingested: %d / Skipped: %d / Errors: %d",
-                summary["ingested"], summary["skipped"], summary["errors"])
+    logger.info("=== Today lines summary (%s) ===", target_date)
+    logger.info(
+        "  completed=%d skipped=%d no_race=%d errors=%d",
+        summary["completed"],
+        summary["skipped"],
+        summary["no_race"],
+        summary["errors"],
+    )
 
 
 if __name__ == "__main__":
