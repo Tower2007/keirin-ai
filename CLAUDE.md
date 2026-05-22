@@ -59,6 +59,7 @@ ingest_day.py は **差分取り込み** に対応しているため、同じ ve
 | 朝 7:00 (cron) | `ingest_today_lines.py` | 当日開催の全場の meta/entries/**lines**/stats |
 | **朝 8:00 (cron, daemon)** | **`ingest_odds_prerace_daemon.py`** | **発走 5 分前 pre-start odds snapshot** (Phase 6 観測基盤) |
 | 翌朝 5:00 (cron) | `ingest_day.py YESTERDAY VENUE` を全場ループ | results/payouts のみ追加 |
+| 月曜 7:30 (cron) | `weekly_drift_report.py --mail` | 過去 7 日蓄積状況 + drift を Gmail 通知 (サイレント障害早期検知) |
 
 ### pre-start odds snapshot 設計 (Phase 6, 2026-05-12 〜)
 - 朝 8:00 に 1 度 `pythonw.exe` (コンソール非表示) でデーモン起動

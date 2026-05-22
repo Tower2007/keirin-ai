@@ -45,7 +45,20 @@ JSJ048 を完全撤廃して、`ingest_today_lines.py` を `ingest_yesterday.py`
 - → T2 (週次レポート cron + Gmail 通知) で早期検知体制を作る
 
 ### 次のアクション
-T1 完了 → T2 (週次レポート cron + Gmail 通知の移植)
+T1 完了 → T2 (週次レポート cron + Gmail 通知の移植) **も完了**
+
+### T2 完了 (2026-05-23 07:08)
+- `gmail_notify.py` を auto から移植 (keirin の .env 命名に合わせて調整)
+- `weekly_drift_report.py` に `--mail` フラグ追加 (本文 + 添付)
+- `scripts/cron_weekly_report.bat` 作成
+- cron `keirin-ai-weekly-report` 登録 (毎週月曜 7:30)
+- `.env` の変数名置換 (auto の GMAIL_USER → keirin の GMAIL_ADDRESS、
+  MAIL_TO → NOTIFY_TO) で動作確認、メール到達確認済
+
+### 今後の早期検知体制
+件名: `[keirin-ai] 週次 drift report YYYY-MM-DD~YYYY-MM-DD (ok snapshots: N)`
+→ **件名の N=0 を見ればサイレント障害を即検知**。
+5/17〜22 のような 6 日間気付かない事態は再発しない。
 
 ---
 
