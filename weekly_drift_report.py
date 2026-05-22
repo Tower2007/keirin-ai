@@ -48,6 +48,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--since", default=None,
                     help="集計開始日 (YYYY-MM-DD)、--days より優先")
     ap.add_argument("--out", default=str(REPORT_PATH))
+    ap.add_argument("--mail", action="store_true",
+                    help="生成したレポートを .env の NOTIFY_TO へメール送信")
     return ap.parse_args()
 
 
@@ -248,6 +250,30 @@ def main() -> None:
     out_path = Path(args.out)
     out_path.write_text(report, encoding="utf-8")
     print(f"\nReport: {out_path}")
+
+    if args.mail:
+        try:
+            from gmail_notify import send_email
+        except Exception as e:
+            print(f"⚠️ gmail_notify import 失敗: {e}", file=sys.stderr)
+            return
+        # メール本文は markdown 全文 (Gmail 上は等幅で読めるので十分)
+        # 件名にカバレッジサマリを入れる (蓄積 0 を一目で検知できる)
+        n_ok = sum(
+            v.get("ok", 0) for v in summarize_coverage(log_rows).values()
+        ) if log_rows else 0
+        subject = (
+            f"[keirin-ai] 週次 drift report {start}~{end} "
+            f"(ok snapshots: {n_ok})"
+        )
+        try:
+            send_email(
+                subject=subject,
+                body=report,
+                attachments=[str(out_path)],
+            )
+        except Exception as e:
+            print(f"⚠️ メール送信失敗: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":
