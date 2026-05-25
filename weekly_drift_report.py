@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import subprocess
 import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta
@@ -141,6 +142,137 @@ def summarize_actual_offset(log_rows: list[dict]) -> dict[int, dict[str, float]]
     return out
 
 
+def get_daily_ingestion_health(start: date, end: date) -> list[dict]:
+    """各日の各 CSV 行数 + 健全性ステータスを返す (auto の get_recent_days_status 風)。
+
+    出力 (日付降順): [
+      {date, venues, entries, lines, stats, results, payouts, snapshots_ok, status}
+    ]
+    """
+    csv_keys = [
+        ("venues", "race_meta.csv"),   # 1 場 = 1 row
+        ("entries", "race_entries.csv"),
+        ("lines", "race_lines.csv"),
+        ("stats", "race_stats.csv"),
+        ("results", "race_results.csv"),
+        ("payouts", "payouts.csv"),
+    ]
+    counts: dict[str, dict[str, int]] = defaultdict(
+        lambda: {k: 0 for k, _ in csv_keys}
+    )
+
+    # 各 CSV を date 列で集計 (重い race_odds_prerace.csv は除外)
+    for label, fname in csv_keys:
+        path = DATA_DIR / fname
+        if not path.exists():
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    rd = r.get("race_date", "")
+                    if not rd:
+                        continue
+                    try:
+                        d = date.fromisoformat(rd)
+                    except ValueError:
+                        continue
+                    if start <= d <= end:
+                        counts[rd][label] += 1
+        except Exception:
+            pass  # 読めなくても他の集計は続ける
+
+    # snapshot 数は snapshot_log の status=ok から取る (race_odds_prerace.csv 全読み回避)
+    log_path = DATA_DIR / "prerace_snapshot_log.csv"
+    snap_ok: dict[str, int] = defaultdict(int)
+    if log_path.exists():
+        with open(log_path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for r in reader:
+                rd = r.get("race_date", "")
+                if not rd:
+                    continue
+                try:
+                    d = date.fromisoformat(rd)
+                except ValueError:
+                    continue
+                if start <= d <= end and r.get("status") == "ok":
+                    snap_ok[rd] += 1
+
+    today = date.today()
+    rows = []
+    d = end
+    while d >= start:
+        ds = d.isoformat()
+        c = counts.get(ds, {k: 0 for k, _ in csv_keys})
+        snaps = snap_ok.get(ds, 0)
+        # status 判定
+        if c["entries"] == 0:
+            status = "❌ NO_DATA"
+        elif d == today:
+            status = "🟡 TODAY (進行中)"
+        elif c["results"] == 0:
+            status = "⚠️ RESULTS_MISSING"
+        elif c["lines"] == 0:
+            status = "⚠️ LINES_MISSING"
+        elif snaps == 0:
+            status = "⚠️ NO_SNAPSHOT"
+        else:
+            status = "✅ OK"
+        rows.append({
+            "date": ds,
+            "venues": c["venues"],
+            "entries": c["entries"],
+            "lines": c["lines"],
+            "stats": c["stats"],
+            "results": c["results"],
+            "payouts": c["payouts"],
+            "snapshots_ok": snaps,
+            "status": status,
+        })
+        d -= timedelta(days=1)
+    return rows
+
+
+def check_cron_health() -> list[dict]:
+    """schtasks /query で各 cron task の Last Run / Last Result / Next Run を取得。"""
+    tasks = [
+        "keirin-ai-results",
+        "keirin-ai-lines",
+        "keirin-ai-prerace-daemon",
+        "keirin-ai-weekly-report",
+    ]
+    # 日本語 / 英語ロケール両対応の key set
+    key_aliases = {
+        "Last Run Time": "last_run", "前回の実行時刻": "last_run",
+        "Last Result": "last_result", "前回の結果": "last_result",
+        "Next Run Time": "next_run", "次回の実行時刻": "next_run",
+        "Status": "status", "状態": "status",
+    }
+    out = []
+    for t in tasks:
+        info = {"task": t, "last_run": "-", "last_result": "-",
+                "next_run": "-", "status": "-"}
+        try:
+            raw = subprocess.run(
+                ["schtasks", "/query", "/tn", t, "/v", "/fo", "list"],
+                capture_output=True, timeout=10,
+            )
+            text = raw.stdout.decode("cp932", errors="replace")
+            for line in text.splitlines():
+                if ":" not in line:
+                    continue
+                k, _, v = line.partition(":")
+                k = k.strip()
+                v = v.strip()
+                if k in key_aliases:
+                    info[key_aliases[k]] = v
+        except Exception as e:
+            info["status"] = f"query failed: {e}"
+        out.append(info)
+    return out
+
+
 def render_report(start: date, end: date,
                   log_rows: list[dict],
                   odds_rows: list[dict]) -> str:
@@ -151,6 +283,48 @@ def render_report(start: date, end: date,
     L.append(f"生成時刻: {datetime.now().isoformat(timespec='seconds')}")
     L.append("")
     L.append("Phase 6 R3 (Codex 5/15 提案 P2、Gemini EHI 監視に相当)。")
+    L.append("")
+
+    # ─── 0. データスクレイピング 日次ヘルスチェック ─────────
+    L.append("## 0. データスクレイピング 日次ヘルス (auto/boat 形式)")
+    L.append("")
+    daily = get_daily_ingestion_health(start, end)
+    if not daily:
+        L.append("(集計不能)")
+    else:
+        L.append("| 日付 | 場 | entries | lines | stats | results | payouts | snapshots | status |")
+        L.append("|---|---:|---:|---:|---:|---:|---:|---:|---|")
+        for d in daily:
+            L.append(
+                f"| {d['date']} | {d['venues']} | {d['entries']} | "
+                f"{d['lines']} | {d['stats']} | {d['results']} | "
+                f"{d['payouts']} | {d['snapshots_ok']} | {d['status']} |"
+            )
+    L.append("")
+    L.append("**status 凡例**: ✅ OK / 🟡 TODAY (進行中) / "
+             "⚠️ LINES_MISSING (narabi 取り逃し) / "
+             "⚠️ RESULTS_MISSING / ⚠️ NO_SNAPSHOT / ❌ NO_DATA")
+    L.append("")
+
+    # cron 死活
+    L.append("## 0-2. cron タスク死活")
+    L.append("")
+    cron_status = check_cron_health()
+    L.append("| Task | Last Run | Last Result | Next Run | Status |")
+    L.append("|---|---|---|---|---|")
+    # Windows schtasks の正常コード:
+    # 0 = success / 267009 = currently running / 267011 = last result not set yet
+    OK_RESULTS = {"0", "-", "267009", "267011"}
+    for c in cron_status:
+        ok_marker = "✅" if c["last_result"] in OK_RESULTS else "⚠️"
+        L.append(
+            f"| {c['task']} | {c['last_run']} | "
+            f"{ok_marker} {c['last_result']} | {c['next_run']} | {c['status']} |"
+        )
+    L.append("")
+    L.append("**Last Result**: 0=成功 / 267009=実行中 (daemon は朝〜夜走る) / "
+             "267011=未実行。それ以外はエラー。"
+             "**Last Run が古すぎる** = cron 止まっている疑い。")
     L.append("")
 
     # ─── 1. 蓄積カバレッジ ────────────────────────────────
@@ -258,13 +432,31 @@ def main() -> None:
             print(f"⚠️ gmail_notify import 失敗: {e}", file=sys.stderr)
             return
         # メール本文は markdown 全文 (Gmail 上は等幅で読めるので十分)
-        # 件名にカバレッジサマリを入れる (蓄積 0 を一目で検知できる)
+        # 件名にサマリを入れる (健全日数 + snapshot 数で一目検知)
         n_ok = sum(
             v.get("ok", 0) for v in summarize_coverage(log_rows).values()
         ) if log_rows else 0
+        daily_health = get_daily_ingestion_health(start, end)
+        n_total = len(daily_health)
+        n_ok_days = sum(
+            1 for d in daily_health if d["status"].startswith("✅")
+        )
+        n_warn_days = sum(
+            1 for d in daily_health if d["status"].startswith("⚠️")
+        )
+        n_no_data = sum(
+            1 for d in daily_health if d["status"].startswith("❌")
+        )
+        # 件名: 全部 OK なら ✅、警告/エラーあれば ⚠️/❌
+        if n_no_data > 0:
+            mark = "❌"
+        elif n_warn_days > 0:
+            mark = "⚠️"
+        else:
+            mark = "✅"
         subject = (
-            f"[keirin-ai] 週次 drift report {start}~{end} "
-            f"(ok snapshots: {n_ok})"
+            f"{mark} [keirin-ai] 週次 {start}~{end} "
+            f"OK {n_ok_days}/{n_total}日 / snapshots {n_ok}"
         )
         try:
             send_email(
