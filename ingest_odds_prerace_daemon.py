@@ -327,7 +327,7 @@ def main() -> None:
             race["race_date"], int(race["place_code"]), int(race["race_no"]),
             now, mins_before, target_offset,
         )
-        log_rows.append({
+        row = {
             "race_date": race["race_date"],
             "place_code": race["place_code"],
             "race_no": race["race_no"],
@@ -338,10 +338,14 @@ def main() -> None:
             "status": result["status"],
             "n_rows": result["n_rows"],
             "note": result["note"],
-        })
-
-    if log_rows:
-        append_rows("prerace_snapshot_log.csv", log_rows)
+        }
+        log_rows.append(row)
+        # 逐次 append: PC sleep/シャットダウン耐性 (5/27, 5/29 で
+        # 一括 append 設計が log ロストを起こした教訓、2026-05-31)
+        try:
+            append_rows("prerace_snapshot_log.csv", [row])
+        except Exception as e:
+            logger.error("snapshot_log append failed: %s", e)
 
     n_ok = sum(1 for r in log_rows if r["status"] == "ok")
     n_no = sum(1 for r in log_rows if r["status"] == "no_odds")
