@@ -103,6 +103,41 @@ ingest_day.py は **差分取り込み** に対応しているため、同じ ve
 - 「最遅約定可能 snapshot (≈1 分前?) → 確定の乖離が必要エッジ幅より小さく、系統的逆選択無し」
   なら本番 EV 設計続行。満たさなければ「5 分前 odds 基準の EV は机上計算」と確定し直接賭けは棄却。
 
+### ✅ Phase B: 本番 EV 配管検証 (2026-06-06 完了)
+日付重複ゼロのブロッカー (picks 4/26 凍結 vs prerace odds 5/16〜) を解消し、
+production_no_odds 予測 → 組合せ確率 → live odds 結合の「配管」を通した。
+**配管検証のみ。券種優劣・黒字赤字は一切結論づけない (本番判定は Phase C 以降)。**
+
+#### 実施内容
+1. `build_race_quality.py` 再実行 → `race_quality.csv` 解凍 (4/26 → 6/5, normal 13,544 venue-days)。
+2. `ml_baseline.py` 再実行 → `ml_picks.csv` 解凍 (2025-01-01〜2026-06-05)。
+   同時に **per-car 確率 `ml_pred_probs.csv` を新規出力** (EV 配管の材料)。
+   make_picks は単一推奨組しか出さないため、車番単位 p_win/p_top2/p_top3 を別途保存。
+3. `ev_prerace_pipeline.py` 新規: per-race 正規化 → Harville で ST2/SH2 組合せ確率
+   → `race_odds_prerace` を (race,bet,kumi) 最新 snapshot に dedup → EV 結合。
+   - 二車単 ST2 (順序 i→j): P = q_i·q_j/(1−q_i)
+   - 二車複 SH2 (無順序): P(i-j)+P(j-i)
+
+#### 健全性 2 指標 (両方クリア)
+- **(1) overround**: dedup 後 Σ(1/odds) median = SH2 1.347 / ST2 1.342 / RH3 1.342 /
+  RT3 1.336 (implied takeout 25〜26%)。生 1.18M → dedup 395k (≈3 offset 分が正しく畳まれた)。
+  → odds dedup + implied prob 配管は正しい。**W は 4.33 (range odds の min を使うため過大、既知の特殊形式)**。
+- **(2) all-buy ROI**: **pool 加重 (market implied 比例) で全 exotics ≈ −26.5〜−27.1%**
+  → 清算ロジック健全。理論 1/overround−1=−25.4% との差 ≈2% は Phase A の執行ウェッジと一致
+  (snapshot で賭け realized で清算するため)。Phase A↔B が独立に整合。
+  uniform 均等買いは exotics で −40% 前後 (本命勝ち bias の正常挙動、清算検証には pool を使う)。
+
+#### 配管健全性
+- Harville 正規化: ST2/SH2 とも Σp_combo per-race = **1.0000** (完璧)。
+- EV 結合: picks×odds 重複 1,066 レース、combo カバレッジほぼ 100% (70,080 行)。
+  → 日付重複ゼロのブロッカー解消。出力 `ev_prerace_merged.csv`。
+- ⚠️ 結合 EV は snapshot odds ベース。Phase A より snapshot は確定配当に対し楽観
+  (当選側 −2〜7%) なので、EV>1 割合は上方バイアス。**黒字判定には使えない**。
+
+#### 次アクション (Phase C への入口)
+- 母数蓄積 + Phase A の最遅約定 snapshot 確定後、執行ウェッジ込み二重 EV 計算
+  (snapshot odds と realized 両方) + bootstrap CI + FDR 補正で初めて採否判定。
+
 ### cron 登録コマンド (pre-start daemon)
 ```
 schtasks /create /tn "keirin-ai-prerace-daemon" /sc daily /st 08:00 ^

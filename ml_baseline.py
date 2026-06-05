@@ -705,6 +705,16 @@ def main() -> None:
     picks = make_picks(test, preds)
     print(f"  picks generated for {len(picks):,} races")
 
+    # per-car 予測確率を別ファイルに出力 (Phase A/B 本番 EV 配管用)
+    # make_picks は単一推奨組しか出さないが、EV 計算には全組合せの確率が要る。
+    # ここで車番単位の p_win/p_top2/p_top3 を保存し、ev_prerace_pipeline.py が
+    # per-race 正規化 → 組合せ確率変換 → race_odds_prerace と結合する。
+    prob_df = test[["race_date", "place_code", "race_no", "car_no"]].copy()
+    prob_df["p_win"] = preds["y_win"]
+    prob_df["p_top2"] = preds["y_top2"]
+    prob_df["p_top3"] = preds["y_top3"]
+    prob_df["pred_rank"] = preds["y_rank"]
+
     # 出力ファイル名に suffix
     suffix_parts = []
     if args.use_odds:
@@ -719,6 +729,10 @@ def main() -> None:
     picks_out = DATA / f"ml_picks{suffix}.csv"
     picks.to_csv(picks_out, index=False)
     print(f"  picks saved to {picks_out}")
+
+    probs_out = DATA / f"ml_pred_probs{suffix}.csv"
+    prob_df.to_csv(probs_out, index=False)
+    print(f"  per-car probs saved to {probs_out} ({len(prob_df):,} rows)")
 
     bt = backtest(picks, data["payouts"])
     bt_thresh = backtest_thresholds(picks, data["payouts"])
