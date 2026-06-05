@@ -76,6 +76,33 @@ ingest_day.py は **差分取り込み** に対応しているため、同じ ve
   リーケージのため**本番 EV 評価には使えない** (Codex 発見、Gemini 確認)。
   upper-bound 検証用に保持。詳細: `Opinion/CodexOpinion.md` 2026-05-12 エントリ参照
 
+### ⚠️ Phase A: 約定実現性 (settlement realizability) 検証 (2026-06-06 開始)
+30 エージェント収益化議論 (Opinion 参照) の最重要発見「5 分前 snapshot odds は
+約定できる価格ではない」を実データで検証するフェーズ。
+
+#### 初回測定結果 (`analyze_settlement_wedge.py`, 5/16〜6/5, 当選組 n≈1,100/券種)
+執行ウェッジ = 実現配当(payout/100) / snapshot odds − 1。マイナス = 当選側で不利。
+- **5 分前 snapshot は確定配当と大きく乖離**: median −0.9〜−6.7%、|wedge|>10% が当選切符の
+  42〜65%。→ **5 分前 odds 基準の EV は信頼できない** (議論結論を実データが裏付け)。
+- **2 分前にはほぼ収束**: median≈0%、|wedge|>10% は 4〜13% に激減。
+- **ワイド(W) は構造的にダメ**: 2 分前でも median −6.7%、確定配当が snapshot レンジ内に
+  収まるのは 66% のみ。レンジオッズで点価格約定できず、EV 検証には不向き。
+- 逆選択は 3〜6 倍人気帯に集中 (median −8%)。穴(20倍+)はほぼ中立〜有利。
+
+#### daemon 変更 (lead_mins に直前取得を追加)
+- `LEAD_MINS_DEFAULT` を `"5,3,2"` → `"5,3,2,1,0.5"` に拡張 (float offset 対応, 0.5=30 秒前)。
+- 目的: 2 分→0 分の残差ウェッジを直接観測し、約定可能な最遅 snapshot を特定する。
+- **cron 変更不要** (引数なし呼び出しが新 default を自動採用)。
+- `target_offset_min` は `5,3,2,1,0.5` で保存 (整数は int、0.5 のみ float)。
+  `analyze_settlement_wedge.py` / `weekly_drift_report.py` は float offset 対応済。
+- 締切直前は複数場のレースが同時刻に集中するため一部 0.5 分 snapshot が数秒遅れる可能性。
+  実測 `minutes_before_start` を記録するので分析側で吸収。
+
+#### 合格基準 / 次アクション
+- 数週間蓄積後、5 分前 / 直前 / 確定実現オッズの 3 点を券種別に再突合。
+- 「最遅約定可能 snapshot (≈1 分前?) → 確定の乖離が必要エッジ幅より小さく、系統的逆選択無し」
+  なら本番 EV 設計続行。満たさなければ「5 分前 odds 基準の EV は机上計算」と確定し直接賭けは棄却。
+
 ### cron 登録コマンド (pre-start daemon)
 ```
 schtasks /create /tn "keirin-ai-prerace-daemon" /sc daily /st 08:00 ^

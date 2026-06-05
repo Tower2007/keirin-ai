@@ -102,12 +102,18 @@ def load_prerace_odds(start: date, end: date) -> list[dict]:
     return rows
 
 
-def summarize_coverage(log_rows: list[dict]) -> dict[int, dict[str, int]]:
+def _parse_offset(raw) -> float | int:
+    """target_offset_min を float でパースし、整数値は int に正規化 (5.0→5, 0.5→0.5)。"""
+    f = float(raw)
+    return int(f) if f.is_integer() else f
+
+
+def summarize_coverage(log_rows: list[dict]) -> dict[float, dict[str, int]]:
     """offset 別の status counts を集計。"""
-    by_offset: dict[int, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    by_offset: dict[float, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for r in log_rows:
         try:
-            off = int(r["target_offset_min"])
+            off = _parse_offset(r["target_offset_min"])
         except (ValueError, KeyError, TypeError):
             # 旧スキーマ (target_offset_min 無し) は default 5 扱い
             off = 5
@@ -116,22 +122,22 @@ def summarize_coverage(log_rows: list[dict]) -> dict[int, dict[str, int]]:
     return {k: dict(v) for k, v in by_offset.items()}
 
 
-def summarize_actual_offset(log_rows: list[dict]) -> dict[int, dict[str, float]]:
+def summarize_actual_offset(log_rows: list[dict]) -> dict[float, dict[str, float]]:
     """target_offset_min vs actual minutes_before_start を集計。
 
     狙いと実測のズレを定量化 (auto の LEAD_MIN 短縮判断の根拠データ)。
     """
-    by_offset: dict[int, list[int]] = defaultdict(list)
+    by_offset: dict[float, list[int]] = defaultdict(list)
     for r in log_rows:
         if r.get("status") != "ok":
             continue
         try:
-            off = int(r["target_offset_min"])
+            off = _parse_offset(r["target_offset_min"])
             actual = int(r["minutes_before_start"])
         except (ValueError, KeyError, TypeError):
             continue
         by_offset[off].append(actual)
-    out: dict[int, dict[str, float]] = {}
+    out: dict[float, dict[str, float]] = {}
     for off, vals in by_offset.items():
         if not vals:
             out[off] = {"n": 0, "mean": float("nan"), "std": float("nan")}

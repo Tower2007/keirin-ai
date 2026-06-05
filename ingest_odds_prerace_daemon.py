@@ -72,26 +72,36 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 設定
-LEAD_MINS_DEFAULT = "5,3,2"      # 蓄積期 default: drift 比較用に 3 offset 同時取得
+# 蓄積期 default: drift 比較用に複数 offset 同時取得。
+# Phase A (約定実現性検証, 2026-06-06) で締切直前 1 / 0.5 分前を追加。
+# 5 分前 snapshot は確定配当と中央値 -2〜-7% 乖離する (analyze_settlement_wedge.py)
+# ため、2 分前以降の収束過程と最終約定価格との残差ウェッジを測る目的。
+LEAD_MINS_DEFAULT = "5,3,2,1,0.5"  # float 可 (0.5 = 30 秒前)
 ENTRIES_RETRY_MAX = 10           # entries 未準備時の retry 回数
 ENTRIES_RETRY_INTERVAL = 300     # entries retry 待機 (秒) = 5 分
 MISS_TOLERANCE_MIN = 2           # snapshot_at がこの分数以上前なら乗り遅れ扱い
 
 
-def _parse_lead_mins(raw: str) -> list[int]:
-    """'5,3,2' → [5, 3, 2]。整数のみ、降順ソート、重複削除。"""
+def _fmt_off(off: float) -> int | float:
+    """offset を表示・保存用に正規化 (5.0 → 5, 0.5 → 0.5)。"""
+    f = float(off)
+    return int(f) if f.is_integer() else f
+
+
+def _parse_lead_mins(raw: str) -> list[float]:
+    """'5,3,2,1,0.5' → [5.0, 3.0, 2.0, 1.0, 0.5]。float 可、降順、重複削除。"""
     parts = [p.strip() for p in raw.split(",") if p.strip()]
-    vals = []
+    vals: list[float] = []
     for p in parts:
         try:
-            vals.append(int(p))
+            vals.append(float(p))
         except ValueError:
             raise ValueError(f"invalid lead_min value: {p!r}")
     # 降順 (大きい offset = 早い時刻、処理順を時刻昇順にするため後で sort)
     return sorted(set(vals), reverse=True)
 
 
-def _resolve_lead_mins(cli_value: str | None) -> list[int]:
+def _resolve_lead_mins(cli_value: str | None) -> list[float]:
     """LEAD_MINS を決定。優先順位: CLI > KEIRIN_LEAD_MINS > KEIRIN_LEAD_MIN > default。"""
     if cli_value:
         return _parse_lead_mins(cli_value)
@@ -102,7 +112,7 @@ def _resolve_lead_mins(cli_value: str | None) -> list[int]:
     env_min = os.environ.get("KEIRIN_LEAD_MIN")
     if env_min:
         try:
-            return [int(env_min)]
+            return [float(env_min)]
         except ValueError:
             pass
     return _parse_lead_mins(LEAD_MINS_DEFAULT)
@@ -148,7 +158,7 @@ def load_today_entries(target_date: str) -> list[dict]:
     return races
 
 
-def load_captured(target_date: str) -> set[tuple[str, str, str, int]]:
+def load_captured(target_date: str) -> set[tuple[str, str, str, float]]:
     """既に status=ok で取得済みの (date, place, race_no, target_offset_min) を返す。
 
     target_offset_min を含むことで、同一レースの 5/3/2 分前 snapshot を別物として
@@ -157,7 +167,7 @@ def load_captured(target_date: str) -> set[tuple[str, str, str, int]]:
     path = DATA_DIR / "prerace_snapshot_log.csv"
     if not path.exists():
         return set()
-    captured: set[tuple[str, str, str, int]] = set()
+    captured: set[tuple[str, str, str, float]] = set()
     with open(path, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -166,7 +176,7 @@ def load_captured(target_date: str) -> set[tuple[str, str, str, int]]:
             if row.get("status") != "ok":
                 continue
             try:
-                offset = int(row.get("target_offset_min", ""))
+                offset = _fmt_off(float(row.get("target_offset_min", "")))
             except (ValueError, TypeError):
                 # 旧スキーマ (target_offset_min 無し) の行は default 5 として扱う
                 offset = 5
@@ -183,22 +193,23 @@ def capture_race(
     race_no: int,
     snapshot_dt: datetime,
     minutes_before: int,
-    target_offset_min: int,
+    target_offset_min: float,
 ) -> dict:
     """1 レースのオッズ snapshot を取得し、CSV へ追記。"""
     race_id = NetkeirinClient.make_race_id(race_date, place_code, race_no)
     snapshot_iso = snapshot_dt.strftime("%Y-%m-%d %H:%M:%S")
+    off_disp = _fmt_off(target_offset_min)
 
     try:
         odds_data = client.get_odds(race_id)
     except Exception as e:
-        logger.error("  R%d off=%d (%s) FETCH ERROR: %s",
-                     race_no, target_offset_min, race_id, e)
+        logger.error("  R%d off=%s (%s) FETCH ERROR: %s",
+                     race_no, off_disp, race_id, e)
         return {"status": "fail", "n_rows": 0, "note": f"fetch_error: {e}"[:200]}
 
     if odds_data is None:
-        logger.info("  R%d off=%d (%s) NG (no odds)",
-                    race_no, target_offset_min, race_id)
+        logger.info("  R%d off=%s (%s) NG (no odds)",
+                    race_no, off_disp, race_id)
         return {"status": "no_odds", "n_rows": 0, "note": "netkeirin_NG"}
 
     rows = parse_odds_lists(place_code, race_date, race_no, odds_data)
@@ -208,12 +219,12 @@ def capture_race(
     for r in rows:
         r["snapshot_dt"] = snapshot_iso
         r["minutes_before_start"] = minutes_before
-        r["target_offset_min"] = target_offset_min
+        r["target_offset_min"] = off_disp
 
     n = append_rows("race_odds_prerace.csv", rows)
     logger.info(
-        "  R%d off=%d: captured %d rows (mins_before=%d, official_dt=%s)",
-        race_no, target_offset_min, n, minutes_before,
+        "  R%d off=%s: captured %d rows (mins_before=%d, official_dt=%s)",
+        race_no, off_disp, n, minutes_before,
         odds_data.get("official_dt", ""),
     )
     return {"status": "ok", "n_rows": n, "note": ""}
@@ -265,14 +276,15 @@ def main() -> None:
 
     # snapshot スケジュール組み立て: (race, st_dt, snapshot_at, target_offset_min)
     # 各レースについて lead_mins 全部分 entry を作る
-    schedule: list[tuple[dict, datetime, datetime, int]] = []
+    schedule: list[tuple[dict, datetime, datetime, float]] = []
     for race in races:
         st_dt = parse_st_time(race["race_date"], race["st_time"])
         if st_dt is None:
             continue
         for offset in lead_mins:
+            off_norm = _fmt_off(offset)
             key = (race["race_date"], race["place_code"],
-                   race["race_no"], offset)
+                   race["race_no"], off_norm)
             if key in captured:
                 continue
             snapshot_at = st_dt - timedelta(minutes=offset)
@@ -298,9 +310,9 @@ def main() -> None:
     logger.info("Schedule: %d captures planned (across offsets %s)",
                 len(fresh_schedule), lead_mins)
     for r, st, sa, off in fresh_schedule[:5]:
-        logger.info("  %s pc=%s R%s off=%d: st=%s snapshot_at=%s",
+        logger.info("  %s pc=%s R%s off=%s: st=%s snapshot_at=%s",
                     r["race_date"], r["place_code"], r["race_no"],
-                    off, st.strftime("%H:%M"), sa.strftime("%H:%M"))
+                    _fmt_off(off), st.strftime("%H:%M"), sa.strftime("%H:%M:%S"))
     if len(fresh_schedule) > 5:
         logger.info("  ... (+%d more)", len(fresh_schedule) - 5)
 
@@ -311,11 +323,11 @@ def main() -> None:
         now = datetime.now()
         wait_sec = (snapshot_at - now).total_seconds()
         if wait_sec > 0:
-            logger.info("Sleep %.0fs (%s) → %s pc=%s R%s off=%d @ %s",
+            logger.info("Sleep %.0fs (%s) → %s pc=%s R%s off=%s @ %s",
                         wait_sec,
                         str(timedelta(seconds=int(wait_sec))),
                         race["race_date"], race["place_code"],
-                        race["race_no"], target_offset,
+                        race["race_no"], _fmt_off(target_offset),
                         snapshot_at.strftime("%H:%M:%S"))
             time.sleep(wait_sec)
 
@@ -334,7 +346,7 @@ def main() -> None:
             "st_time": race["st_time"],
             "snapshot_dt": now.strftime("%Y-%m-%d %H:%M:%S"),
             "minutes_before_start": mins_before,
-            "target_offset_min": target_offset,
+            "target_offset_min": _fmt_off(target_offset),
             "status": result["status"],
             "n_rows": result["n_rows"],
             "note": result["note"],
@@ -351,9 +363,9 @@ def main() -> None:
     n_no = sum(1 for r in log_rows if r["status"] == "no_odds")
     n_fail = sum(1 for r in log_rows if r["status"] == "fail")
     # offset 別サマリ
-    by_offset: dict[int, dict[str, int]] = {}
+    by_offset: dict[float, dict[str, int]] = {}
     for r in log_rows:
-        off = r["target_offset_min"]
+        off = float(r["target_offset_min"])
         by_offset.setdefault(off, {"ok": 0, "no_odds": 0, "fail": 0})
         by_offset[off][r["status"]] = by_offset[off].get(r["status"], 0) + 1
     logger.info("=" * 60)
@@ -361,8 +373,8 @@ def main() -> None:
                 n_ok, n_no, n_fail)
     for off in sorted(by_offset.keys(), reverse=True):
         s = by_offset[off]
-        logger.info("  offset=%d 分前: ok=%d, no_odds=%d, fail=%d",
-                    off, s.get("ok", 0), s.get("no_odds", 0), s.get("fail", 0))
+        logger.info("  offset=%s 分前: ok=%d, no_odds=%d, fail=%d",
+                    _fmt_off(off), s.get("ok", 0), s.get("no_odds", 0), s.get("fail", 0))
     logger.info("=" * 60)
 
 
