@@ -27,6 +27,13 @@ tmp/
 
 # Claude Code workspace (per-user)
 .claude/
+.claude/settings.local.json
+
+# Codex workspace (per-user)
+.codex/
+
+# Lock files (per-env)
+*.lock
 
 # OS
 .DS_Store
