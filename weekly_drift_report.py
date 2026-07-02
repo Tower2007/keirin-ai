@@ -41,6 +41,10 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 REPORT_PATH = DATA_DIR / "weekly_drift_report.md"
 
+# Windows schtasks の正常コード:
+# 0 = success / 267009 = currently running / 267011 = last result not set yet
+CRON_OK_RESULTS = {"0", "-", "267009", "267011"}
+
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
@@ -279,19 +283,9 @@ def check_cron_health() -> list[dict]:
     return out
 
 
-def render_report(start: date, end: date,
-                  log_rows: list[dict],
-                  odds_rows: list[dict]) -> str:
-    """マークダウンレポート文字列を生成。"""
+def _md_daily_health(start: date, end: date) -> list[str]:
+    """セクション 0: データスクレイピング日次ヘルス。"""
     L: list[str] = []
-    L.append(f"# Weekly Drift Report ({start.isoformat()} ~ {end.isoformat()})")
-    L.append("")
-    L.append(f"生成時刻: {datetime.now().isoformat(timespec='seconds')}")
-    L.append("")
-    L.append("Phase 6 R3 (Codex 5/15 提案 P2、Gemini EHI 監視に相当)。")
-    L.append("")
-
-    # ─── 0. データスクレイピング 日次ヘルスチェック ─────────
     L.append("## 0. データスクレイピング 日次ヘルス (auto/boat 形式)")
     L.append("")
     daily = get_daily_ingestion_health(start, end)
@@ -311,18 +305,19 @@ def render_report(start: date, end: date,
              "⚠️ LINES_MISSING (narabi 取り逃し) / "
              "⚠️ RESULTS_MISSING / ⚠️ NO_SNAPSHOT / ❌ NO_DATA")
     L.append("")
+    return L
 
-    # cron 死活
+
+def _md_cron_health() -> list[str]:
+    """セクション 0-2: cron タスク死活。"""
+    L: list[str] = []
     L.append("## 0-2. cron タスク死活")
     L.append("")
     cron_status = check_cron_health()
     L.append("| Task | Last Run | Last Result | Next Run | Status |")
     L.append("|---|---|---|---|---|")
-    # Windows schtasks の正常コード:
-    # 0 = success / 267009 = currently running / 267011 = last result not set yet
-    OK_RESULTS = {"0", "-", "267009", "267011"}
     for c in cron_status:
-        ok_marker = "✅" if c["last_result"] in OK_RESULTS else "⚠️"
+        ok_marker = "✅" if c["last_result"] in CRON_OK_RESULTS else "⚠️"
         L.append(
             f"| {c['task']} | {c['last_run']} | "
             f"{ok_marker} {c['last_result']} | {c['next_run']} | {c['status']} |"
@@ -332,8 +327,12 @@ def render_report(start: date, end: date,
              "267011=未実行。それ以外はエラー。"
              "**Last Run が古すぎる** = cron 止まっている疑い。")
     L.append("")
+    return L
 
-    # ─── 1. 蓄積カバレッジ ────────────────────────────────
+
+def _md_coverage(log_rows: list[dict]) -> list[str]:
+    """セクション 1: 蓄積カバレッジ (offset 別 status 分布)。"""
+    L: list[str] = []
     L.append("## 1. 蓄積カバレッジ (offset 別 status 分布)")
     L.append("")
     if not log_rows:
@@ -352,8 +351,12 @@ def render_report(start: date, end: date,
             total = ok + no_odds + fail
             L.append(f"| {off} | {ok} | {no_odds} | {fail} | {total} |")
     L.append("")
+    return L
 
-    # ─── 2. 取得タイミング精度 ────────────────────────────
+
+def _md_timing(log_rows: list[dict]) -> list[str]:
+    """セクション 2: 取得タイミング精度。"""
+    L: list[str] = []
     L.append("## 2. 取得タイミング精度 (target_offset_min vs 実測 minutes_before_start)")
     L.append("")
     if not log_rows:
@@ -366,8 +369,12 @@ def render_report(start: date, end: date,
             t = timing[off]
             L.append(f"| {off} | {t['n']} | {t['mean']:.2f} | {t['std']:.2f} |")
     L.append("")
+    return L
 
-    # ─── 3. live odds vs final odds drift ────────────────
+
+def _md_drift(odds_rows: list[dict]) -> list[str]:
+    """セクション 3: live odds vs final odds drift。"""
+    L: list[str] = []
     L.append("## 3. live odds ↔ final odds drift")
     L.append("")
     if not odds_rows:
@@ -384,8 +391,12 @@ def render_report(start: date, end: date,
         #       ST2 1着付け min odds をレース別 + offset 別で比較する集計
         L.append(f"prerace odds 行数: {len(odds_rows):,} (集計ロジックは蓄積後実装)")
     L.append("")
+    return L
 
-    # ─── 4. Market Health (EHI 風) ────────────────────────
+
+def _md_market_health(odds_rows: list[dict]) -> list[str]:
+    """セクション 4: Market Health (EHI 風)。"""
+    L: list[str] = []
     L.append("## 4. Market Health (EHI: Edge Health Index)")
     L.append("")
     if not odds_rows:
@@ -396,8 +407,12 @@ def render_report(start: date, end: date,
     else:
         L.append("(EHI 計算は蓄積後実装)")
     L.append("")
+    return L
 
-    # ─── 5. アクション推奨 ────────────────────────────────
+
+def _md_actions(log_rows: list[dict]) -> list[str]:
+    """セクション 5: アクション推奨 + フッタ。"""
+    L: list[str] = []
     L.append("## 5. アクション推奨")
     L.append("")
     n_ok_total = sum(
@@ -413,48 +428,56 @@ def render_report(start: date, end: date,
     L.append("")
     L.append("---")
     L.append("生成: `python weekly_drift_report.py`")
+    return L
+
+
+def render_report(start: date, end: date,
+                  log_rows: list[dict],
+                  odds_rows: list[dict]) -> str:
+    """マークダウンレポート文字列を生成。"""
+    L: list[str] = []
+    L.append(f"# Weekly Drift Report ({start.isoformat()} ~ {end.isoformat()})")
+    L.append("")
+    L.append(f"生成時刻: {datetime.now().isoformat(timespec='seconds')}")
+    L.append("")
+    L.append("Phase 6 R3 (Codex 5/15 提案 P2、Gemini EHI 監視に相当)。")
+    L.append("")
+    L.extend(_md_daily_health(start, end))
+    L.extend(_md_cron_health())
+    L.extend(_md_coverage(log_rows))
+    L.extend(_md_timing(log_rows))
+    L.extend(_md_drift(odds_rows))
+    L.extend(_md_market_health(odds_rows))
+    L.extend(_md_actions(log_rows))
     return "\n".join(L)
 
 
-def _html_escape(s: str) -> str:
-    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+# ─── HTML レポート共通 inline スタイル (Gmail で剥がされない) ───────────
+HTML_TBL = ('border="1" cellpadding="6" cellspacing="0" '
+            'style="border-collapse:collapse; border-color:#bbb; '
+            'font-family:Arial,sans-serif; font-size:13px; margin-bottom:8px;"')
+HTML_TH = ('style="background:#e8e8e8; text-align:left; padding:6px 10px; '
+           'font-weight:bold; border:1px solid #bbb;"')
+HTML_TH_R = ('style="background:#e8e8e8; text-align:right; padding:6px 10px; '
+             'font-weight:bold; border:1px solid #bbb;"')
+HTML_TD_L = 'style="text-align:left; padding:6px 10px; border:1px solid #ddd;"'
+HTML_TD_R = 'style="text-align:right; padding:6px 10px; border:1px solid #ddd;"'
+HTML_ROW_ALT = 'style="background:#fafafa;"'
 
 
-def render_report_html(start: date, end: date,
-                       log_rows: list[dict]) -> str:
-    """Gmail で剥がされない inline-style 版 HTML レポート。
-
-    text 版と同じ情報を見やすい色付き表で表示。
-    """
-    daily = get_daily_ingestion_health(start, end)
-    cron_status = check_cron_health()
-    cov = summarize_coverage(log_rows) if log_rows else {}
-    timing = summarize_actual_offset(log_rows) if log_rows else {}
-
-    # サマリ計算 (件名と整合)
+def _html_header(start: date, end: date, daily: list[dict],
+                 n_snap_total: int) -> list[str]:
+    """div 開始 + タイトル h2 + サマリ行 (件名と整合)。"""
     n_total = len(daily)
     n_ok_days = sum(1 for d in daily if d["status"].startswith("✅"))
     n_warn = sum(1 for d in daily if d["status"].startswith("⚠️"))
     n_nodata = sum(1 for d in daily if d["status"].startswith("❌"))
-    n_snap_total = sum(d["snapshots_ok"] for d in daily)
     if n_nodata > 0:
         overall = ("🔴 異常", "#c62828")
     elif n_warn > 0:
         overall = ("🟡 要確認", "#f9a825")
     else:
         overall = ("🟢 正常", "#2e7d32")
-
-    # 共通スタイル
-    TBL = ('border="1" cellpadding="6" cellspacing="0" '
-           'style="border-collapse:collapse; border-color:#bbb; '
-           'font-family:Arial,sans-serif; font-size:13px; margin-bottom:8px;"')
-    TH = ('style="background:#e8e8e8; text-align:left; padding:6px 10px; '
-          'font-weight:bold; border:1px solid #bbb;"')
-    TH_R = ('style="background:#e8e8e8; text-align:right; padding:6px 10px; '
-            'font-weight:bold; border:1px solid #bbb;"')
-    TD_L = 'style="text-align:left; padding:6px 10px; border:1px solid #ddd;"'
-    TD_R = 'style="text-align:right; padding:6px 10px; border:1px solid #ddd;"'
-    ROW_ALT = 'style="background:#fafafa;"'
 
     p: list[str] = []
     p.append('<div style="font-family:Arial,sans-serif; font-size:14px; '
@@ -473,20 +496,24 @@ def render_report_html(start: date, end: date,
         f'❌ ロスト <b>{n_nodata}</b>日 &nbsp;|&nbsp; '
         f'累計 snapshots <b>{n_snap_total:,}</b></p>'
     )
+    return p
 
-    # 0. データスクレイピング日次ヘルス
+
+def _html_daily_health(daily: list[dict]) -> list[str]:
+    """セクション 0: データスクレイピング日次ヘルス。"""
+    p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
              '0. データスクレイピング日次ヘルス</h3>')
-    p.append(f'<table {TBL}>')
+    p.append(f'<table {HTML_TBL}>')
     p.append(
-        f'<tr><th {TH}>日付</th><th {TH_R}>場</th>'
-        f'<th {TH_R}>entries</th><th {TH_R}>lines</th>'
-        f'<th {TH_R}>stats</th><th {TH_R}>results</th>'
-        f'<th {TH_R}>payouts</th><th {TH_R}>snapshots</th>'
-        f'<th {TH}>status</th></tr>'
+        f'<tr><th {HTML_TH}>日付</th><th {HTML_TH_R}>場</th>'
+        f'<th {HTML_TH_R}>entries</th><th {HTML_TH_R}>lines</th>'
+        f'<th {HTML_TH_R}>stats</th><th {HTML_TH_R}>results</th>'
+        f'<th {HTML_TH_R}>payouts</th><th {HTML_TH_R}>snapshots</th>'
+        f'<th {HTML_TH}>status</th></tr>'
     )
     for i, d in enumerate(daily):
-        alt = ROW_ALT if i % 2 == 1 else ""
+        alt = HTML_ROW_ALT if i % 2 == 1 else ""
         if d["status"].startswith("✅"):
             color = "#2e7d32"
         elif d["status"].startswith("🟡"):
@@ -495,19 +522,19 @@ def render_report_html(start: date, end: date,
             color = "#f57f17"
         else:
             color = "#c62828"
-        status_cell = (f'<td {TD_L} style="text-align:left; padding:6px 10px; '
+        status_cell = (f'<td {HTML_TD_L} style="text-align:left; padding:6px 10px; '
                        f'border:1px solid #ddd; color:{color}; '
                        f'font-weight:bold;">{d["status"]}</td>')
         p.append(
             f'<tr {alt}>'
-            f'<td {TD_L}>{d["date"]}</td>'
-            f'<td {TD_R}>{d["venues"]}</td>'
-            f'<td {TD_R}>{d["entries"]:,}</td>'
-            f'<td {TD_R}>{d["lines"]:,}</td>'
-            f'<td {TD_R}>{d["stats"]:,}</td>'
-            f'<td {TD_R}>{d["results"]:,}</td>'
-            f'<td {TD_R}>{d["payouts"]:,}</td>'
-            f'<td {TD_R}>{d["snapshots_ok"]:,}</td>'
+            f'<td {HTML_TD_L}>{d["date"]}</td>'
+            f'<td {HTML_TD_R}>{d["venues"]}</td>'
+            f'<td {HTML_TD_R}>{d["entries"]:,}</td>'
+            f'<td {HTML_TD_R}>{d["lines"]:,}</td>'
+            f'<td {HTML_TD_R}>{d["stats"]:,}</td>'
+            f'<td {HTML_TD_R}>{d["results"]:,}</td>'
+            f'<td {HTML_TD_R}>{d["payouts"]:,}</td>'
+            f'<td {HTML_TD_R}>{d["snapshots_ok"]:,}</td>'
             f'{status_cell}'
             f'</tr>'
         )
@@ -516,77 +543,93 @@ def render_report_html(start: date, end: date,
              '✅ OK / 🟡 TODAY (進行中) / '
              '⚠️ LINES_MISSING (narabi 取り逃し) / '
              '⚠️ RESULTS_MISSING / ⚠️ NO_SNAPSHOT / ❌ NO_DATA</p>')
+    return p
 
-    # 0-2. cron 死活
-    OK_RESULTS = {"0", "-", "267009", "267011"}
+
+def _html_cron_health(cron_status: list[dict]) -> list[str]:
+    """セクション 0-2: cron タスク死活。"""
+    p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
              '0-2. cron タスク死活</h3>')
-    p.append(f'<table {TBL}>')
-    p.append(f'<tr><th {TH}>Task</th><th {TH}>Last Run</th>'
-             f'<th {TH}>Last Result</th><th {TH}>Next Run</th>'
-             f'<th {TH}>Status</th></tr>')
+    p.append(f'<table {HTML_TBL}>')
+    p.append(f'<tr><th {HTML_TH}>Task</th><th {HTML_TH}>Last Run</th>'
+             f'<th {HTML_TH}>Last Result</th><th {HTML_TH}>Next Run</th>'
+             f'<th {HTML_TH}>Status</th></tr>')
     for i, c in enumerate(cron_status):
-        alt = ROW_ALT if i % 2 == 1 else ""
-        is_ok = c["last_result"] in OK_RESULTS
+        alt = HTML_ROW_ALT if i % 2 == 1 else ""
+        is_ok = c["last_result"] in CRON_OK_RESULTS
         mark = "✅" if is_ok else "⚠️"
         color = "#2e7d32" if is_ok else "#c62828"
         p.append(
             f'<tr {alt}>'
-            f'<td {TD_L}><b>{c["task"]}</b></td>'
-            f'<td {TD_L}>{c["last_run"]}</td>'
-            f'<td {TD_L} style="text-align:left; padding:6px 10px; '
+            f'<td {HTML_TD_L}><b>{c["task"]}</b></td>'
+            f'<td {HTML_TD_L}>{c["last_run"]}</td>'
+            f'<td {HTML_TD_L} style="text-align:left; padding:6px 10px; '
             f'border:1px solid #ddd; color:{color};">'
             f'{mark} {c["last_result"]}</td>'
-            f'<td {TD_L}>{c["next_run"]}</td>'
-            f'<td {TD_L}>{c["status"]}</td>'
+            f'<td {HTML_TD_L}>{c["next_run"]}</td>'
+            f'<td {HTML_TD_L}>{c["status"]}</td>'
             f'</tr>'
         )
     p.append('</table>')
     p.append('<p style="color:#666; font-size:12px; margin:4px 0 0 0;">'
              'Last Result: 0=成功 / 267009=実行中 (daemon は朝〜夜稼働) / '
              '267011=未実行 / それ以外=エラー</p>')
+    return p
 
-    # 1. 蓄積カバレッジ
+
+def _html_coverage(cov: dict[float, dict[str, int]]) -> list[str]:
+    """セクション 1: 蓄積カバレッジ。"""
+    p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
              '1. 蓄積カバレッジ (offset 別 status 分布)</h3>')
     if not cov:
         p.append('<p style="color:#999;">⚠️ 未蓄積</p>')
     else:
-        p.append(f'<table {TBL}>')
-        p.append(f'<tr><th {TH_R}>offset (分前)</th><th {TH_R}>ok</th>'
-                 f'<th {TH_R}>no_odds</th><th {TH_R}>fail</th>'
-                 f'<th {TH_R}>total</th></tr>')
+        p.append(f'<table {HTML_TBL}>')
+        p.append(f'<tr><th {HTML_TH_R}>offset (分前)</th><th {HTML_TH_R}>ok</th>'
+                 f'<th {HTML_TH_R}>no_odds</th><th {HTML_TH_R}>fail</th>'
+                 f'<th {HTML_TH_R}>total</th></tr>')
         for off in sorted(cov.keys(), reverse=True):
             s = cov[off]
             ok = s.get("ok", 0); no_odds = s.get("no_odds", 0); fail = s.get("fail", 0)
             total = ok + no_odds + fail
             p.append(
-                f'<tr><td {TD_R}><b>{off}</b></td><td {TD_R}>{ok}</td>'
-                f'<td {TD_R}>{no_odds}</td><td {TD_R}>{fail}</td>'
-                f'<td {TD_R}>{total}</td></tr>'
+                f'<tr><td {HTML_TD_R}><b>{off}</b></td><td {HTML_TD_R}>{ok}</td>'
+                f'<td {HTML_TD_R}>{no_odds}</td><td {HTML_TD_R}>{fail}</td>'
+                f'<td {HTML_TD_R}>{total}</td></tr>'
             )
         p.append('</table>')
+    return p
 
-    # 2. 取得タイミング精度
+
+def _html_timing(timing: dict[float, dict[str, float]]) -> list[str]:
+    """セクション 2: 取得タイミング精度。"""
+    p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
              '2. 取得タイミング精度 (target vs 実測)</h3>')
     if not timing:
         p.append('<p style="color:#999;">⚠️ 未蓄積</p>')
     else:
-        p.append(f'<table {TBL}>')
-        p.append(f'<tr><th {TH_R}>offset (狙い)</th><th {TH_R}>n_ok</th>'
-                 f'<th {TH_R}>実測 mean (分前)</th>'
-                 f'<th {TH_R}>実測 std</th></tr>')
+        p.append(f'<table {HTML_TBL}>')
+        p.append(f'<tr><th {HTML_TH_R}>offset (狙い)</th><th {HTML_TH_R}>n_ok</th>'
+                 f'<th {HTML_TH_R}>実測 mean (分前)</th>'
+                 f'<th {HTML_TH_R}>実測 std</th></tr>')
         for off in sorted(timing.keys(), reverse=True):
             t = timing[off]
             p.append(
-                f'<tr><td {TD_R}><b>{off}</b></td>'
-                f'<td {TD_R}>{t["n"]}</td>'
-                f'<td {TD_R}>{t["mean"]:.2f}</td>'
-                f'<td {TD_R}>{t["std"]:.2f}</td></tr>'
+                f'<tr><td {HTML_TD_R}><b>{off}</b></td>'
+                f'<td {HTML_TD_R}>{t["n"]}</td>'
+                f'<td {HTML_TD_R}>{t["mean"]:.2f}</td>'
+                f'<td {HTML_TD_R}>{t["std"]:.2f}</td></tr>'
             )
         p.append('</table>')
+    return p
 
+
+def _html_actions(n_snap_total: int) -> list[str]:
+    """セクション 3-4 (未実装表示) + 5 (アクション推奨) + フッタ + div 終了。"""
+    p: list[str] = []
     # 3-4. drift / EHI は未実装メッセージのみ
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
              '3-4. live↔final drift / Market Health (EHI)</h3>')
@@ -609,7 +652,78 @@ def render_report_html(start: date, end: date,
         'keirin-ai weekly drift report</p>'
     )
     p.append('</div>')
+    return p
+
+
+def render_report_html(start: date, end: date,
+                       log_rows: list[dict]) -> str:
+    """Gmail で剥がされない inline-style 版 HTML レポート。
+
+    text 版と同じ情報を見やすい色付き表で表示。
+    """
+    daily = get_daily_ingestion_health(start, end)
+    cron_status = check_cron_health()
+    cov = summarize_coverage(log_rows) if log_rows else {}
+    timing = summarize_actual_offset(log_rows) if log_rows else {}
+    n_snap_total = sum(d["snapshots_ok"] for d in daily)
+
+    p: list[str] = []
+    p.extend(_html_header(start, end, daily, n_snap_total))
+    p.extend(_html_daily_health(daily))
+    p.extend(_html_cron_health(cron_status))
+    p.extend(_html_coverage(cov))
+    p.extend(_html_timing(timing))
+    p.extend(_html_actions(n_snap_total))
     return "\n".join(p)
+
+
+def _send_mail_report(report: str, out_path: Path,
+                      start: date, end: date,
+                      log_rows: list[dict]) -> None:
+    """--mail 指定時: サマリ入り件名 + HTML 版を付けてレポートをメール送信。"""
+    try:
+        from gmail_notify import send_email
+    except Exception as e:
+        print(f"⚠️ gmail_notify import 失敗: {e}", file=sys.stderr)
+        return
+    # メール本文は markdown 全文 (Gmail 上は等幅で読めるので十分)
+    # 件名にサマリを入れる (健全日数 + snapshot 数で一目検知)
+    n_ok = sum(
+        v.get("ok", 0) for v in summarize_coverage(log_rows).values()
+    ) if log_rows else 0
+    daily_health = get_daily_ingestion_health(start, end)
+    n_total = len(daily_health)
+    n_ok_days = sum(
+        1 for d in daily_health if d["status"].startswith("✅")
+    )
+    n_warn_days = sum(
+        1 for d in daily_health if d["status"].startswith("⚠️")
+    )
+    n_no_data = sum(
+        1 for d in daily_health if d["status"].startswith("❌")
+    )
+    # 件名: 全部 OK なら ✅、警告/エラーあれば ⚠️/❌
+    if n_no_data > 0:
+        mark = "❌"
+    elif n_warn_days > 0:
+        mark = "⚠️"
+    else:
+        mark = "✅"
+    subject = (
+        f"{mark} [keirin-ai] 週次 {start}~{end} "
+        f"OK {n_ok_days}/{n_total}日 / snapshots {n_ok}"
+    )
+    # HTML 版を生成 (Gmail で見栄え良い表に)
+    html_body = render_report_html(start, end, log_rows)
+    try:
+        send_email(
+            subject=subject,
+            body=report,
+            html=html_body,
+            attachments=[str(out_path)],
+        )
+    except Exception as e:
+        print(f"⚠️ メール送信失敗: {e}", file=sys.stderr)
 
 
 def main() -> None:
@@ -628,49 +742,7 @@ def main() -> None:
     print(f"\nReport: {out_path}")
 
     if args.mail:
-        try:
-            from gmail_notify import send_email
-        except Exception as e:
-            print(f"⚠️ gmail_notify import 失敗: {e}", file=sys.stderr)
-            return
-        # メール本文は markdown 全文 (Gmail 上は等幅で読めるので十分)
-        # 件名にサマリを入れる (健全日数 + snapshot 数で一目検知)
-        n_ok = sum(
-            v.get("ok", 0) for v in summarize_coverage(log_rows).values()
-        ) if log_rows else 0
-        daily_health = get_daily_ingestion_health(start, end)
-        n_total = len(daily_health)
-        n_ok_days = sum(
-            1 for d in daily_health if d["status"].startswith("✅")
-        )
-        n_warn_days = sum(
-            1 for d in daily_health if d["status"].startswith("⚠️")
-        )
-        n_no_data = sum(
-            1 for d in daily_health if d["status"].startswith("❌")
-        )
-        # 件名: 全部 OK なら ✅、警告/エラーあれば ⚠️/❌
-        if n_no_data > 0:
-            mark = "❌"
-        elif n_warn_days > 0:
-            mark = "⚠️"
-        else:
-            mark = "✅"
-        subject = (
-            f"{mark} [keirin-ai] 週次 {start}~{end} "
-            f"OK {n_ok_days}/{n_total}日 / snapshots {n_ok}"
-        )
-        # HTML 版を生成 (Gmail で見栄え良い表に)
-        html_body = render_report_html(start, end, log_rows)
-        try:
-            send_email(
-                subject=subject,
-                body=report,
-                html=html_body,
-                attachments=[str(out_path)],
-            )
-        except Exception as e:
-            print(f"⚠️ メール送信失敗: {e}", file=sys.stderr)
+        _send_mail_report(report, out_path, start, end, log_rows)
 
 
 if __name__ == "__main__":
