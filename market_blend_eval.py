@@ -131,9 +131,13 @@ def market_top2_from_sh2(sh2: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=KEYS + ["car_no", "mkt_top2"])
 
 
-def load_probs(start: str, end: str) -> pd.DataFrame:
-    """production_no_odds の OOS 予測 (weekly_retrain が差分生成、in-sample 無し)。"""
-    p = pd.read_csv(DATA / "ml_pred_probs.csv", dtype={k: str for k in KEYS})
+def load_probs(start: str, end: str, path: str | None = None) -> pd.DataFrame:
+    """production_no_odds の OOS 予測 (weekly_retrain が差分生成、in-sample 無し)。
+
+    path 指定時は測定用の別 OOS 確率ファイル (A/B 用) を読む。既定は production。
+    """
+    src = path if path else str(DATA / "ml_pred_probs.csv")
+    p = pd.read_csv(src, dtype={k: str for k in KEYS})
     p = p[(p.race_date >= start) & (p.race_date <= end)].copy()
     p["car_no"] = p.car_no.astype(int)
     # 本番配管 (ev_prerace_pipeline) と同じ per-race 正規化 q
@@ -344,6 +348,8 @@ def main() -> int:
                     help="snapshot offset 分前 (既定 1 = Phase A の最遅約定可能点)")
     ap.add_argument("--start", default=START_DEFAULT)
     ap.add_argument("--end", default="2099-12-31")
+    ap.add_argument("--probs", default=None,
+                    help="測定用の別 OOS 確率 CSV (A/B 用)。既定は production ml_pred_probs.csv")
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--seed", type=int, default=20260703)
     ap.add_argument("--self-test", action="store_true")
@@ -353,7 +359,7 @@ def main() -> int:
 
     rng = np.random.default_rng(args.seed)
     print(f"=== keirin 市場ブレンド オフライン評価 (T-{args.offset}分) ===")
-    probs = load_probs(args.start, args.end)
+    probs = load_probs(args.start, args.end, args.probs)
     if probs.empty:
         print("WARN: ml_pred_probs が期間内 0 行")
         return 1

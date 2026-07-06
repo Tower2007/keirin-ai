@@ -188,6 +188,18 @@ def load_data_extended() -> tuple[dict[str, pd.DataFrame], str]:
         "stats": stats_all.merge(normal, on=["race_date", "place_code"]),
         "results": results_all.merge(normal, on=["race_date", "place_code"]),
     }
+
+    # 実ライン特徴量 (公式並び)。存在すれば読み込み、build_dataset で left merge。
+    # 被覆外 (2026-04-26 より前) は NaN のまま → LightGBM native 欠損処理。
+    lr_path = DATA / "line_real_features.csv"
+    if lr_path.exists():
+        line_real = pd.read_csv(lr_path)
+        data["line_real_features"] = line_real
+        print(f"  line_real_features: {len(line_real):,} "
+              f"({line_real['race_date'].min()}..{line_real['race_date'].max()})")
+    else:
+        print("  line_real_features.csv 未検出 → 実ライン特徴量なしで学習")
+
     data_max = str(data["results"]["race_date"].max())
     print(f"  meta: {len(data['meta']):,}, entries: {len(data['entries']):,}, "
           f"stats: {len(data['stats']):,}, results: {len(data['results']):,}")
@@ -498,7 +510,12 @@ def main() -> None:
 
     print("\n[2] dataset 構築 (ml_baseline.build_dataset 共用)")
     df = mlb.build_dataset(data)
-    feat_cols = list(mlb.FEAT_NUM) + list(mlb.FEAT_CAT)
+    feat_cols = list(mlb.FEAT_NUM)
+    # 実ライン特徴量が読み込まれていれば本投入 (build_dataset が merge 済)
+    if "line_real_features" in data:
+        feat_cols = feat_cols + list(mlb.LINE_REAL_NUM_FEATURES)
+        print(f"  実ライン特徴量を本投入: +{len(mlb.LINE_REAL_NUM_FEATURES)} 列")
+    feat_cols = feat_cols + list(mlb.FEAT_CAT)
     oos_end = min(yesterday, data_max)
 
     print("\n[3] 学習 + OOS 評価")

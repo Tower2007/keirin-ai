@@ -77,6 +77,18 @@ LINE_NUM_FEATURES = [
     "nige_propensity",
 ]
 
+# 実ライン特徴量 (2026-07 本投入): 公式並び race_lines.csv を復元した実データ。
+# LINE_NUM_FEATURES (代理ヒューリスティック) の後継。build_line_real_features.py が
+# narabi_x の欠番で区切ってライン構成を復元し per-car 特徴量にする。
+# データ範囲は 2026-04-26〜 のみ。それ以前は NaN → LightGBM native 欠損処理に任せ、
+# 「実ラインがある行だけ」市場に対し情報を足せるかを本ゲートで測る。
+LINE_REAL_NUM_FEATURES = [
+    "line_size", "line_pos", "is_line_head", "is_line_second",
+    "is_line_third_plus", "is_tanki", "pos_ratio",
+    "n_lines_in_race", "max_line_size", "is_in_largest_line",
+    "line_size_rank", "n_tanki_in_race", "head_nige_propensity",
+]
+
 # 市場ミスプライシング特徴量 (Phase 6 N3, 2026-05-13)
 # Feature importance 分析でモデルが 80%+ 市場依存と判明。
 # 市場 vs 戦績の食い違いを明示的に特徴量化することで、市場非合理性に
@@ -144,7 +156,8 @@ LGB_PARAMS_REG = {
 
 # ─── 1. データロード ─────────────────────────────────────────────────────
 
-def load_data(use_odds: bool = False, use_line: bool = False) -> dict[str, pd.DataFrame]:
+def load_data(use_odds: bool = False, use_line: bool = False,
+              use_line_real: bool = False) -> dict[str, pd.DataFrame]:
     """status='normal' の venue-day だけに絞った各 CSV を返す。"""
     quality = pd.read_csv(DATA / "race_quality.csv")
     normal = quality.loc[quality["status"] == "normal", ["race_date", "place_code"]]
@@ -194,6 +207,19 @@ def load_data(use_odds: bool = False, use_line: bool = False) -> dict[str, pd.Da
         )
         out["line_features"] = line
         print(f"line_features: {len(line):,}")
+
+    if use_line_real:
+        lr_path = DATA / "line_real_features.csv"
+        if not lr_path.exists():
+            print(f"⚠️ line_real_features.csv not found at {lr_path}")
+            print("   先に `python build_line_real_features.py` を実行してください")
+            sys.exit(1)
+        # 実ラインは 2026-04-26〜 のみ。normal 絞りは inner join せず、後段の
+        # build_dataset で left merge して被覆外は NaN のまま LightGBM に渡す。
+        line_real = pd.read_csv(lr_path)
+        out["line_real_features"] = line_real
+        print(f"line_real_features: {len(line_real):,} "
+              f"({line_real['race_date'].min()}..{line_real['race_date'].max()})")
 
     print(f"meta: {len(meta):,}, entries: {len(entries):,}, "
           f"stats: {len(stats):,}, results: {len(results):,}, "
@@ -348,6 +374,19 @@ def build_dataset(data: dict[str, pd.DataFrame],
         df["nige_propensity"] = df["nige_propensity"].fillna(
             df["nige_propensity"].median()
         )
+
+    # 実ライン特徴量を merge (use_line_real=True で load_data が用意済)
+    # ⚠️ 被覆外 (2026-04-26 より前) は NaN のまま残す。0 埋めや中央値埋めは
+    # 「単騎/先頭ではない」等の誤情報を過去 5 年に注入するため厳禁。
+    # LightGBM が NaN を native に分岐処理し、実データがある行だけ効かせる。
+    if "line_real_features" in data:
+        df = df.merge(
+            data["line_real_features"][keys + LINE_REAL_NUM_FEATURES],
+            on=keys, how="left",
+        )
+        n_cov = df[LINE_REAL_NUM_FEATURES[0]].notna().sum()
+        print(f"  rows with real-line features: {n_cov:,} / {len(df):,} "
+              f"({n_cov / len(df):.1%})")
 
     # 着順 (results) を結合してターゲット作成
     df = df.merge(
@@ -659,7 +698,10 @@ def main() -> None:
                          "Phase 6 6a-3 upper-bound 検証用。")
     ap.add_argument("--use-line", action="store_true",
                     help="弱ライン特徴量を追加 (line_features.csv を merge)。"
-                         "Phase 6 6a-2 ライン構造の弱信号。")
+                         "Phase 6 6a-2 ライン構造の弱信号 (代理ヒューリスティック)。")
+    ap.add_argument("--use-line-real", action="store_true",
+                    help="実ライン特徴量を追加 (line_real_features.csv を merge)。"
+                         "公式並び race_lines.csv の実データ本投入 (2026-07)。")
     ap.add_argument("--use-mispricing", action="store_true",
                     help="市場ミスプライシング派生特徴量を追加 (要 --use-odds)。"
                          "Phase 6 N3 市場 vs 戦績の食い違い検出。")
@@ -682,7 +724,8 @@ def main() -> None:
     print("=" * 70)
 
     print("\n[1/4] Loading data...")
-    data = load_data(use_odds=args.use_odds, use_line=args.use_line)
+    data = load_data(use_odds=args.use_odds, use_line=args.use_line,
+                     use_line_real=args.use_line_real)
 
     print("\n[2/4] Building dataset...")
     df = build_dataset(data, use_mispricing=args.use_mispricing)
@@ -696,6 +739,8 @@ def main() -> None:
         feat_cols = feat_cols + W_ODDS_NUM_FEATURES
     if args.use_line:
         feat_cols = feat_cols + LINE_NUM_FEATURES
+    if args.use_line_real:
+        feat_cols = feat_cols + LINE_REAL_NUM_FEATURES
     if args.use_mispricing:
         feat_cols = feat_cols + MISPRICING_NUM_FEATURES
     feat_cols = feat_cols + FEAT_CAT
@@ -723,6 +768,8 @@ def main() -> None:
         suffix_parts.append("w")
     if args.use_line:
         suffix_parts.append("line")
+    if args.use_line_real:
+        suffix_parts.append("linereal")
     if args.use_mispricing:
         suffix_parts.append("mp")
     suffix = f"_with_{'_'.join(suffix_parts)}" if suffix_parts else ""
