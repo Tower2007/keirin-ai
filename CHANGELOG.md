@@ -1,5 +1,30 @@
 # CHANGELOG
 
+## 2026-07-11 (多角監査 P1/P2 対応、Codex 条件付き承認)
+
+- **P1: 週次メール HTML の未定義 `HTML_TD` 参照 3 箇所を修正** (`weekly_drift_report.py`
+  959/1004/1011 行 → `HTML_TD_L`。全て文字セル、数値セルは `HTML_TD_R` の既存慣習どおり)。
+  7/13(月) 07:30 の週次メール HTML 生成が NameError で死ぬ経路を解消。
+  - Codex 条件の残存ゼロテストを追加: `tests/test_weekly_drift_report.py`
+    (bare `HTML_TD` のソース検査 + `_html_drift_health` / `_html_gate_a` の
+    合成データレンダリング + 実データ dry-run で NameError 消失を確認済)。
+- **P2-3: gate A に lag null 率条件を追加** (`evaluate_gate_a`): 秒精度列
+  (`capture_lag_sec`) が null の ok 行を黙って素通しする穴に対し、
+  **週×offset で null 率 > 50% は「lag 未計測」として fail** を追加。
+  分母 = その週×offset の status=ok 行数 (行単位)、ok 行 0 は null 率 100% 扱い。
+  事前固定基準 (150/98%/10s/1%/5%) は不変 (緩和ではなく未計測の fail 化)。
+  定義は CLAUDE.md「凍結基準」節に固定文書化 (Codex 条件)。
+  現況データでは全 offset×週で null 率 0% のため判定への影響なし。
+- **P2-4: CLAUDE.md gate A 基準文言を実装に整合**
+  (「capture_lag_sec の p95」→「|capture_lag_sec| の p95」)。
+- **P2-1: `ingest_day.py` docstring の heal_mode 記述を事実に整合**:
+  日次 cron (`ingest_yesterday.py`) は index を渡すため heal は発動しない。
+  発動経路は手動 `ingest_day.py` / 手動 `recover_missing_races.py` のみ。
+- **P2-2: `daily_shadow_predict.py` の run_type=official に発走時刻ガード追加**:
+  無引数でも当日の最早発走時刻 (race_entries の st_time 最小) を過ぎた実行は
+  rerun に降格 (事前時点性の主張を守る。predicted_at で事後判別可能)。
+- 本番モデル・D: のデータは無変更 (レポート dry-run はスクラッチ領域へ出力)。
+
 ## 2026-07-07
 
 - **実ライン (公式並び) を特徴量に本投入 → coef_model 離陸判定 = NO-GO**

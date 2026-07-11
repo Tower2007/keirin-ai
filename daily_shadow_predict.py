@@ -20,6 +20,8 @@ production モデルはオッズ非依存で予測は朝時点で確定するた
   - race_quality フィルタは適用しない (当日の quality は未確定。
     「その時点で出せた予測」をそのまま残すのが shadow ログの目的)
   - 同一日 × 同一 model_hash が既に存在すればスキップ (再実行安全)
+  - run_type=official は「無引数」かつ「当日の最早発走時刻より前」の実行のみ。
+    最早発走後は無引数でも rerun に降格する (2026-07-11 監査: 事前時点性ガード)
 
 使い方:
   python daily_shadow_predict.py                # today
@@ -112,6 +114,34 @@ def code_revision() -> str:
         return "unknown"
 
 
+def earliest_start_dt(target_date: str) -> datetime | None:
+    """当日の最早発走時刻を race_entries.csv の st_time から返す (無ければ None)。
+
+    run_type=official の発走時刻ガード用 (2026-07-11 監査):
+    無引数実行でも最早発走を過ぎていれば「事前時点性」を主張できない。
+    """
+    try:
+        ent = pd.read_csv(DATA_DIR / "race_entries.csv",
+                          usecols=["race_date", "st_time"], dtype=str,
+                          low_memory=False)
+    except (FileNotFoundError, ValueError):
+        return None
+    st = ent.loc[ent["race_date"] == target_date, "st_time"].dropna()
+    best: datetime | None = None
+    for raw in st.unique():
+        parts = str(raw).split(":")
+        try:
+            h, m = int(parts[0]), int(parts[1])
+            s = int(parts[2]) if len(parts) > 2 else 0
+        except (ValueError, IndexError):
+            continue
+        d = date.fromisoformat(target_date)
+        dt = datetime(d.year, d.month, d.day, h, m, s)
+        if best is None or dt < best:
+            best = dt
+    return best
+
+
 def load_day_dataset(target_date: str) -> pd.DataFrame:
     """当日分のみの dataset を ml_baseline.build_dataset で構築。
 
@@ -170,6 +200,17 @@ def main() -> None:
     # run_type: 朝 cron の事前予測 = official。--force / --date 指定の再実行は
     # rerun (発走後の再実行は事前時点性を主張できないため official と区別)。
     run_type = "rerun" if (args.force or args.date) else "official"
+    # 発走時刻ガード (2026-07-11 監査): 無引数でも当日の最早発走時刻を
+    # 過ぎていたら official を名乗らせない (手動の昼・夕再実行が official に
+    # なる穴)。rerun に落とせば predicted_at で事後判別できる。
+    if run_type == "official":
+        first_start = earliest_start_dt(target_date)
+        if first_start is not None and datetime.now() >= first_start:
+            logger.warning(
+                "最早発走時刻 %s を過ぎた実行のため run_type を official→rerun "
+                "に降格 (事前時点性を主張できない)",
+                first_start.strftime("%H:%M:%S"))
+            run_type = "rerun"
 
     # 日全体の期待 (race, car) 集合を「絞り込み前」に保持 (Codex 07-11 再々指摘:
     # 部分補完で df を欠損分に絞った後に検証すると部分集合で完全性を誤判定する)

@@ -172,6 +172,9 @@ def evaluate_gate_a(end: date) -> dict:
       - planned race に対する ok coverage >= 98%
       - 発走後取得 (seconds_before_start < 0) = 0
       - abs(capture_lag_sec) の p95 <= 10 秒 (早すぎる取得も検知)
+      - capture_lag_sec の null 率 <= 50% (週×offset 単位、分母は status=ok の
+        行数)。null 率 > 50% は「lag 未計測」として fail (2026-07-11 監査:
+        秒精度列 null の ok 行が黙って素通しされる穴を塞ぐ。緩和ではなく追加条件)
       - 直近 14 日の未解決 missing = 0
     券種別条件 (offset × bet、4 週すべて):
       - |median wedge| <= 1.0%、P90(|wedge|) <= 5%、P(|wedge|>10%) <= 5%
@@ -248,6 +251,11 @@ def evaluate_gate_a(end: date) -> dict:
             # abs(): 予定より早すぎる取得も遅延と同様に検知 (Codex 再レビュー)
             lag_p95 = (float(ok["lag"].abs().quantile(0.95))
                        if ok["lag"].notna().any() else float("nan"))
+            # lag null 率 (2026-07-11 監査): 分母 = この週×offset の ok 行数。
+            # ok 行が 0 の週は null 率 100% 扱い (lag 未計測として fail。
+            # coverage でも fail するが定義として固定)
+            lag_null_rate = (float(ok["lag"].isna().mean())
+                             if len(ok) else 1.0)
             mw = m[(m["off"] == off) & (m["race_date"] >= wsi)
                    & (m["race_date"] <= wei)]
             settled = mw[keys].drop_duplicates().shape[0]
@@ -260,7 +268,12 @@ def evaluate_gate_a(end: date) -> dict:
                 shared_fails.append(f"coverage {coverage:.1%}<98%")
             if post_start > 0:
                 shared_fails.append(f"発走後取得 {post_start}")
-            if not (lag_p95 == lag_p95):  # NaN
+            if lag_null_rate > 0.50:
+                # 秒精度列 null の ok 行を黙って素通しさせない (監査 07-11)。
+                # 全行 null (lag_p95=NaN) もここに含まれる
+                shared_fails.append(
+                    f"lag未計測 (null {lag_null_rate:.0%}>50%)")
+            elif not (lag_p95 == lag_p95):  # NaN (防御的、通常は上で捕捉)
                 shared_fails.append("lag 未計測")
             elif lag_p95 > 10:
                 shared_fails.append(f"lag_p95 {lag_p95:.0f}s>10s")
@@ -293,6 +306,7 @@ def evaluate_gate_a(end: date) -> dict:
                 "coverage_pct": round(coverage * 100, 1),
                 "post_start": post_start,
                 "lag_p95": round(lag_p95, 1) if lag_p95 == lag_p95 else None,
+                "lag_null_pct": round(lag_null_rate * 100, 1),
                 "shared_pass": not shared_fails,
                 "shared_fails": shared_fails[:3],
                 "bet_fails": bet_fails,
@@ -703,14 +717,15 @@ def _md_gate_a(gate: dict) -> list[str]:
     for off, data in gate["offsets"].items():
         L.append(f"### offset {off} 分前 (週別詳細)")
         L.append("")
-        L.append("| 週 | settled | cov% | 発走後 | \\|lag\\| p95 | 共有 | 券種別 fail |")
-        L.append("|---|---:|---:|---:|---:|---|---|")
+        L.append("| 週 | settled | cov% | 発走後 | \\|lag\\| p95 | lag null% | 共有 | 券種別 fail |")
+        L.append("|---|---:|---:|---:|---:|---:|---|---|")
         for w in data["weeks"]:
             sh = "✅" if w["shared_pass"] else "❌ " + "; ".join(w["shared_fails"])
             bf = "; ".join(f"{bt}: {', '.join(fs)}"
                            for bt, fs in w["bet_fails"].items()) or "—"
             L.append(f"| {w['week']} | {w['settled']} | {w['coverage_pct']} | "
-                     f"{w['post_start']} | {w['lag_p95']} | {sh} | {bf} |")
+                     f"{w['post_start']} | {w['lag_p95']} | "
+                     f"{w.get('lag_null_pct', '—')} | {sh} | {bf} |")
         L.append("")
     return L
 
@@ -956,7 +971,7 @@ def _html_drift_health(health: dict, missing: list[dict]) -> list[str]:
         for r in health["wedge"]:
             color = "#c00" if r["median_pct"] < -3 else "#333"
             p.append(
-                f'<tr><td {HTML_TD}>{r["bet"]}</td>'
+                f'<tr><td {HTML_TD_L}>{r["bet"]}</td>'
                 f'<td {HTML_TD_R}>{r["offset"]}</td>'
                 f'<td {HTML_TD_R}>{r["n_races"]}</td>'
                 f'<td {HTML_TD_R} style="color:{color};"><b>{r["median_pct"]}</b></td>'
@@ -1001,14 +1016,14 @@ def _html_gate_a(gate: dict) -> list[str]:
         sh = ('<span style="color:#2a7;">✅</span>' if data["shared_pass"]
               else '<span style="color:#c00;">❌</span>')
         cells = "".join(
-            f'<td {HTML_TD}>'
+            f'<td {HTML_TD_L}>'
             + ('<b style="color:#2a7;">PASS</b>'
                if data["bet_verdicts"].get(bt)
                else '<b style="color:#c00;">FAIL</b>')
             + '</td>'
             for bt in GATE_A_BETS)
         p.append(f'<tr><td {HTML_TD_R}><b>{off}</b></td>'
-                 f'<td {HTML_TD}>{sh}</td>{cells}</tr>')
+                 f'<td {HTML_TD_L}>{sh}</td>{cells}</tr>')
     p.append('</table>')
     p.append(f'<p style="color:#999; font-size:12px;">'
              f'直近14日 missing={gate["missing_14d"]}。基準は CLAUDE.md 凍結基準。'

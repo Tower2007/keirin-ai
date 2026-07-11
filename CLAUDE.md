@@ -147,10 +147,25 @@ gate A は `weekly_drift_report.py` が毎週自動判定する (セクション
 A. snapshot timing lock（例: 0.5分前を採用するか）
   - 4週連続、各週で独立した settled races >= 150
   - planned race に対する ok coverage >= 98%
-  - 発走後取得 = 0、capture_lag_sec の p95 <= 10秒
+  - 発走後取得 = 0、|capture_lag_sec| の p95 <= 10秒
+    （abs: 予定より早すぎる取得も遅延と同様に検知）
+  - capture_lag_sec の null 率 <= 50%（週×offset 単位）。
+    null 率 > 50% は「lag 未計測」として fail
+    （2026-07-11 監査: 秒精度列 null の ok 行の黙った素通しを塞ぐ追加条件。
+     既存基準の緩和ではない）
   - 券種×offset ごとに |median wedge| <= 1.0%
   - 同じ母集団で P90(|wedge|) <= 5%、P(|wedge| > 10%) <= 5%
   - 未解決 missing_results / missing_payout = 0（直近14日）
+
+  分母と最小標本数の定義（固定、2026-07-11）:
+  - lag null 率の分母 = その週×offset の prerace_snapshot_log で
+    status=ok の行数（行単位。レース dedup はしない）。
+    分子 = そのうち capture_lag_sec が欠損（数値化不能含む）の行数。
+  - ok 行数 = 0 の週は null 率 100% とみなし「lag 未計測」で fail
+    （coverage 98% でも fail するが、定義として明示固定）。
+  - |lag| p95 は capture_lag_sec が非 null の ok 行のみで計算する。
+    最小標本数は上の null 率条件が兼ねる（非 null が ok 行の 50% 超
+    なければそもそも fail し、p95 は判定に使われない）。
 
 B. strategy/policy lock（EV 閾値・券種を固定して shadow 評価するか）
   - A を満たした timing だけを候補にする

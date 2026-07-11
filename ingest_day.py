@@ -5,14 +5,22 @@ Phase 2: 選手成績 (JSJ002) + 結果 + 払戻 (JSJ012、レース完了分の
 
 per-race 自己治癒 (2026-07-11 Codex レビュー対応):
   旧実装は results セクションを venue-day 単位で skip したため、一部レースだけ
-  取得できた日は残りが永久欠損した。index 無し呼び出し (日次 cron / 手動 /
-  recover_missing_races.py) では per-race 完了状態を確認し、
+  取得できた日は残りが永久欠損した。**index 無し** かつ **過去日** かつ
+  **results 行が既にある** 呼び出しでのみ per-race 完了状態を確認し、
     - results 行が全く無いレース        → JSJ012 再取得 (results+payouts 追記)
     - 着順ありだが払戻が無いレース      → JSJ012 再取得 (payouts のみ追記)
   を行う。append のみで重複を作らない範囲に限定 (置換はしない)。
   中止レース (results 行ありだが着順ゼロの ghost 行) は正当欠損として触らない。
-  index 付き呼び出し (backfill) は従来の venue-day 粒度のまま (性能優先、
-  初回取得が仕事であり回復は recover スクリプトの責務)。
+
+  ⚠️ 発動経路の事実 (2026-07-11 監査で docstring を実装に整合):
+  - 日次 cron (ingest_yesterday.py) は RaceDayIndex を渡すため heal は
+    **発動しない** (venue-day 粒度のまま)。
+  - heal が実際に発動するのは index 無し呼び出し =
+    手動 `python ingest_day.py` と手動 recover_missing_races.py のみ
+    (recover は cron 登録されていない)。日次の取りこぼしは
+    recover_missing_races.py の手動実行で回復する。
+  - index 付き呼び出し (backfill / 日次 cron) は従来の venue-day 粒度
+    (性能優先、初回取得が仕事であり回復は recover スクリプトの責務)。
 
 使い方:
   python ingest_day.py YYYY-MM-DD placeCode
