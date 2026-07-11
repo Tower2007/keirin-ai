@@ -167,31 +167,44 @@ def main() -> None:
                      len(feat_cols), len(missing), missing[:10])
         sys.exit(1)
 
+    # run_type: 朝 cron の事前予測 = official。--force / --date 指定の再実行は
+    # rerun (発走後の再実行は事前時点性を主張できないため official と区別)。
+    run_type = "rerun" if (args.force or args.date) else "official"
+
+    # 日全体の期待 (race, car) 集合を「絞り込み前」に保持 (Codex 07-11 再々指摘:
+    # 部分補完で df を欠損分に絞った後に検証すると部分集合で完全性を誤判定する)
+    key_cols = ["race_date", "place_code", "race_no", "car_no"]
+    expected_all = set(map(tuple, df[key_cols].astype(str).values))
+
     # 再実行安全 (Codex 07-11 指摘で改善): 旧実装は同一日×同一 hash の行が
     # 「1 行でも」あれば日全体を skip し、7:30 時点の出走表が部分取得だと
     # 部分予測が永久に残った。期待 (race, car) 集合との差分で判定し、
     # 不足があれば欠けたレースだけ補完する。
+    # official 実行時は run_type=official の既存行だけを完了扱いにする
+    # (Codex 07-11 再々指摘: 朝 7:30 前に rerun が存在すると official 行を
+    # 作らず丸ごと skip し得た)。
     out_path = DATA_DIR / OUT_NAME
     if out_path.exists() and not args.force:
         existing = pd.read_csv(
             out_path,
             usecols=["race_date", "place_code", "race_no", "car_no",
-                     "model_hash"],
+                     "model_hash", "run_type"],
             dtype=str)
         done = existing[(existing["race_date"] == target_date)
                         & (existing["model_hash"] == mhash)]
-        done_keys = set(map(tuple, done[
-            ["race_date", "place_code", "race_no", "car_no"]].astype(str).values))
-        expect = df[["race_date", "place_code", "race_no", "car_no"]].astype(str)
-        expect_keys = set(map(tuple, expect.values))
-        lack = expect_keys - done_keys
+        if run_type == "official":
+            done = done[done["run_type"] == "official"]
+        done_keys = set(map(tuple, done[key_cols].astype(str).values))
+        lack = expected_all - done_keys
         if not lack:
-            logger.info("既に完全予測済み (date=%s, model=%s, %d rows)。スキップ。",
-                        target_date, mhash, len(expect_keys))
+            logger.info("既に完全予測済み (date=%s, model=%s, run_type=%s基準, "
+                        "%d rows)。スキップ。",
+                        target_date, mhash, run_type, len(expected_all))
             return
         if done_keys:
             # 欠けたレースだけ補完 (レース単位で絞る)
             lack_races = {(k[0], k[1], k[2]) for k in lack}
+            expect = df[key_cols].astype(str)
             mask = expect.apply(
                 lambda r: (r["race_date"], r["place_code"], r["race_no"])
                 in lack_races, axis=1)
@@ -206,14 +219,10 @@ def main() -> None:
     now_dt = datetime.now()
     predicted_at = now_dt.strftime("%Y-%m-%d %H:%M:%S")
     run_id = now_dt.strftime("%Y%m%dT%H%M%S")
-    # run_type: 朝 cron の事前予測 = official。--force / --date 指定の再実行は
-    # rerun (発走後の再実行は事前時点性を主張できないため official と区別)。
-    run_type = "rerun" if (args.force or args.date) else "official"
     X = df[feat_cols]
     # 推論入力の hash (Codex 07-11、再レビューで (race,car) キーも hash 入力に
     # 含めるよう修正): 後結合監査で「この予測は正確にこの入力から出た」を固定。
     # キー順ソート済み (キー列 + 特徴量列) CSV バイト列の SHA-256 先頭 12 桁。
-    key_cols = ["race_date", "place_code", "race_no", "car_no"]
     sorted_df = df.sort_values(key_cols)
     input_hash = hashlib.sha256(
         sorted_df[key_cols + feat_cols].to_csv(index=False).encode("utf-8")
@@ -246,38 +255,42 @@ def main() -> None:
     logger.info("保存: %d 行 (%d races) → %s", n, n_races, OUT_NAME)
 
     # post-run 自己検証 (Codex 07-11 確認事項の常設化):
-    #  (1) run_type=official であること (cron 経路の確認)
-    #  (2) 当日の期待 (race, car) が official/rerun 行で全て揃うこと
+    #  (1) この run の全行が run_type=official であること (cron 経路の確認)
+    #  (2) 日全体の期待 (race, car) [絞り込み前に保持した expected_all] が
+    #      **official 行だけ**で全て揃うこと
     #  (3) prediction_input_hash / code_revision が非空であること
-    # 3 点が通れば「shadow 観測の正式な起点」として扱える。
+    # official run で 3 点が通れば「shadow 観測の正式な起点」として扱える。
+    # rerun は (2)(3) を情報表示するが、正式評価対象外 (別メッセージ、
+    # Codex 再々指摘: rerun に「正式観測として有効」を出さない)。
     saved = pd.read_csv(
         DATA_DIR / OUT_NAME,
         usecols=["race_date", "place_code", "race_no", "car_no", "run_id",
                  "run_type", "prediction_input_hash", "code_revision"],
         dtype=str)
     this_run = saved[saved["run_id"] == run_id]
-    checks = []
-    checks.append(("run_type=official",
-                   (this_run["run_type"] == "official").all()
-                   if run_type == "official" else None))
-    verifiable = saved[(saved["race_date"] == target_date)
-                       & saved["run_type"].isin(["official", "rerun"])]
-    got = set(map(tuple, verifiable[
-        ["race_date", "place_code", "race_no", "car_no"]].values))
-    expect_all = set(map(tuple, df[
-        ["race_date", "place_code", "race_no", "car_no"]].astype(str).values))
-    checks.append(("期待(race,car)完全", expect_all <= got))
-    checks.append(("input_hash/revision非空",
-                   bool(this_run["prediction_input_hash"].str.len().gt(0).all()
-                        and this_run["code_revision"].str.len().gt(0).all())))
-    all_ok = all(v for _, v in checks if v is not None)
-    for name, v in checks:
-        mark = "SKIP(rerun)" if v is None else ("OK" if v else "NG")
-        logger.info("  verify %s: %s", name, mark)
-    if all_ok:
-        logger.info("post-run verify: ALL OK (shadow 正式観測として有効)")
+    official_rows = saved[(saved["race_date"] == target_date)
+                          & (saved["run_type"] == "official")]
+    official_got = set(map(tuple, official_rows[key_cols].values))
+    ck_type = (this_run["run_type"] == "official").all()
+    ck_complete = expected_all <= official_got
+    ck_hash = bool(this_run["prediction_input_hash"].str.len().gt(0).all()
+                   and this_run["code_revision"].str.len().gt(0).all())
+    logger.info("  verify run_type=official: %s", "OK" if ck_type else "NG")
+    logger.info("  verify official行での期待(race,car)完全: %s (%d/%d)",
+                "OK" if ck_complete else "NG",
+                len(expected_all & official_got), len(expected_all))
+    logger.info("  verify input_hash/revision非空: %s", "OK" if ck_hash else "NG")
+    if run_type == "official":
+        if ck_type and ck_complete and ck_hash:
+            logger.info("post-run verify: ALL OK (shadow 正式観測として有効)")
+        else:
+            logger.error(
+                "post-run verify: NG あり — この run は正式評価に使う前に確認要")
     else:
-        logger.error("post-run verify: NG あり — この run は正式評価に使う前に確認要")
+        if ck_hash:
+            logger.info("post-run verify: RERUN OK (正式評価対象外)")
+        else:
+            logger.error("post-run verify: RERUN NG (hash/revision 欠落)")
 
 
 if __name__ == "__main__":
