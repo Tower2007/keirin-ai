@@ -156,6 +156,142 @@ def compute_market_health(start: date, end: date) -> dict:
             "n_wedge_races": n_wedge_races}
 
 
+GATE_A_BETS = ["SH2", "ST2", "RH3", "RT3"]  # WH2/WT2 は未発売が多く n 不足のため対象外
+
+
+def evaluate_gate_a(end: date) -> dict:
+    """freeze gate A (snapshot timing lock) の自動判定 (Codex 2026-07-11 提案)。
+
+    直近 4 週 (end を末日とする 7 日ブロック×4) について offset 別に判定:
+      - settled races >= 150 / 週 (wedge を実測できたユニークレース数)
+      - planned race に対する ok coverage >= 98%
+      - 発走後取得 (seconds_before_start < 0) = 0
+      - capture_lag_sec の p95 <= 10 秒
+      - 券種×offset ごとに |median wedge| <= 1.0%
+      - P90(|wedge|) <= 5%、P(|wedge|>10%) <= 5%
+      - 直近 14 日の未解決 missing = 0 (offset 共通)
+    4 週すべて + missing=0 で PASS。通過は「timing 固定可」の意味であり
+    収益の保証ではない (CLAUDE.md 凍結基準の節を参照)。
+    """
+    import pandas as pd
+    # 進行中の当日を含めると planned に夕方レースが入り coverage が
+    # 見かけ上崩れる (snapshot は未来に取れない) ため、完結した日までで評価
+    if end >= date.today():
+        end = date.today() - timedelta(days=1)
+    start28 = end - timedelta(days=27)
+    weeks = [(end - timedelta(days=7 * i + 6), end - timedelta(days=7 * i))
+             for i in range(3, -1, -1)]  # 古い週 → 新しい週
+    keys = ["race_date", "place_code", "race_no"]
+    jkeys = keys + ["bet_type", "kumi_ban"]
+    out: dict = {"weeks": [w[0].isoformat() + "~" + w[1].isoformat()
+                           for w in weeks],
+                 "offsets": {}, "missing_14d": 0}
+
+    # planned races (entries ベース) — 28 日分のみ
+    ent = pd.read_csv(DATA_DIR / "race_entries.csv", usecols=keys,
+                      dtype=str, low_memory=False)
+    ent = ent[(ent["race_date"] >= start28.isoformat())
+              & (ent["race_date"] <= end.isoformat())].drop_duplicates()
+
+    # snapshot log (秒精度列込み)
+    log = pd.read_csv(DATA_DIR / "prerace_snapshot_log.csv",
+                      dtype={k: str for k in keys}, low_memory=False)
+    log = log[(log["race_date"] >= start28.isoformat())
+              & (log["race_date"] <= end.isoformat())]
+    log["off"] = pd.to_numeric(log["target_offset_min"], errors="coerce")
+    log["sbs"] = pd.to_numeric(log.get("seconds_before_start"), errors="coerce")
+    log["lag"] = pd.to_numeric(log.get("capture_lag_sec"), errors="coerce")
+
+    # odds + payouts → wedge (28 日分)
+    odds = pd.read_csv(
+        DATA_DIR / "race_odds_prerace.csv",
+        usecols=jkeys + ["odds", "target_offset_min"],
+        dtype={k: str for k in jkeys}, low_memory=False)
+    odds = odds[(odds["race_date"] >= start28.isoformat())
+                & (odds["race_date"] <= end.isoformat())]
+    odds["odds"] = pd.to_numeric(odds["odds"], errors="coerce")
+    odds = odds[(odds["odds"] > 0) & odds["bet_type"].isin(GATE_A_BETS)]
+    pay = pd.read_csv(DATA_DIR / "payouts.csv", usecols=jkeys + ["payout"],
+                      dtype={k: str for k in jkeys}, low_memory=False)
+    pay = pay[(pay["race_date"] >= start28.isoformat())
+              & (pay["race_date"] <= end.isoformat())]
+    pay["payout"] = pd.to_numeric(pay["payout"], errors="coerce")
+    pay = pay[pay["payout"] > 0].drop_duplicates(subset=jkeys)
+    m = odds.merge(pay, on=jkeys, how="inner")
+    m["wedge"] = (m["payout"] / 100.0) / m["odds"] - 1.0
+    m["off"] = pd.to_numeric(m["target_offset_min"], errors="coerce")
+
+    # 直近 14 日 missing (completion 表)
+    out["missing_14d"] = len(load_completion_missing(
+        end - timedelta(days=13), end))
+
+    offsets = sorted(log["off"].dropna().unique(), reverse=True)
+    for off in offsets:
+        wk_rows = []
+        all_pass = True
+        for ws, we in weeks:
+            wsi, wei = ws.isoformat(), we.isoformat()
+            lw = log[(log["off"] == off) & (log["race_date"] >= wsi)
+                     & (log["race_date"] <= wei)]
+            ok = lw[lw["status"] == "ok"]
+            ok_races = ok[keys].drop_duplicates().shape[0]
+            planned_races = ent[(ent["race_date"] >= wsi)
+                                & (ent["race_date"] <= wei)][keys] \
+                .drop_duplicates().shape[0]
+            coverage = ok_races / planned_races if planned_races else 0.0
+            post_start = int((ok["sbs"] < 0).sum())
+            lag_p95 = float(ok["lag"].quantile(0.95)) if ok["lag"].notna().any() else float("nan")
+            mw = m[(m["off"] == off) & (m["race_date"] >= wsi)
+                   & (m["race_date"] <= wei)]
+            settled = mw[keys].drop_duplicates().shape[0]
+            fails: list[str] = []
+            if settled < 150:
+                fails.append(f"settled {settled}<150")
+            if coverage < 0.98:
+                fails.append(f"coverage {coverage:.1%}<98%")
+            if post_start > 0:
+                fails.append(f"発走後取得 {post_start}")
+            if not (lag_p95 == lag_p95):  # NaN
+                fails.append("lag 未計測")
+            elif lag_p95 > 10:
+                fails.append(f"lag_p95 {lag_p95:.0f}s>10s")
+            worst_med = worst_p90 = worst_p10 = 0.0
+            for bt in GATE_A_BETS:
+                w = mw[mw["bet_type"] == bt]["wedge"].dropna()
+                if len(w) == 0:
+                    fails.append(f"{bt} n=0")
+                    continue
+                med = abs(float(w.median())) * 100
+                p90 = float(w.abs().quantile(0.90)) * 100
+                p10 = float((w.abs() > 0.10).mean()) * 100
+                worst_med = max(worst_med, med)
+                worst_p90 = max(worst_p90, p90)
+                worst_p10 = max(worst_p10, p10)
+                if med > 1.0:
+                    fails.append(f"{bt}|med|{med:.1f}%>1%")
+                if p90 > 5.0:
+                    fails.append(f"{bt}P90 {p90:.1f}%>5%")
+                if p10 > 5.0:
+                    fails.append(f"{bt}P>10% {p10:.1f}%>5%")
+            wk_pass = not fails
+            all_pass = all_pass and wk_pass
+            wk_rows.append({
+                "week": f"{wsi[5:]}~{wei[5:]}", "settled": settled,
+                "coverage_pct": round(coverage * 100, 1),
+                "post_start": post_start,
+                "lag_p95": round(lag_p95, 1) if lag_p95 == lag_p95 else None,
+                "worst_med_pct": round(worst_med, 2),
+                "worst_p90_pct": round(worst_p90, 1),
+                "worst_gt10_pct": round(worst_p10, 1),
+                "pass": wk_pass,
+                "fails": fails[:4],
+            })
+        verdict = all_pass and out["missing_14d"] == 0
+        out["offsets"][_parse_offset(off)] = {
+            "weeks": wk_rows, "verdict": verdict}
+    return out
+
+
 def count_unique_ok_races(log_rows: list[dict]) -> int:
     """ok snapshot が 1 つ以上あるユニークレース数 (gate 判定用、監査 P1-1)。
 
@@ -521,6 +657,33 @@ def _md_completion(missing: list[dict]) -> list[str]:
     return L
 
 
+def _md_gate_a(gate: dict) -> list[str]:
+    """セクション 7: freeze gate A (snapshot timing lock) 自動判定。"""
+    L: list[str] = []
+    L.append("## 7. freeze gate A 判定 (snapshot timing lock)")
+    L.append("")
+    L.append("基準: CLAUDE.md「凍結基準」参照 (4週連続 settled≥150, coverage≥98%, "
+             "発走後0, lag p95≤10s, |median wedge|≤1%, P90≤5%, P>10%≤5%, "
+             "直近14日 missing=0)。**通過 = timing 固定可であり収益の保証ではない。**")
+    L.append("")
+    L.append(f"- 直近 14 日の未解決 missing: **{gate['missing_14d']}**")
+    L.append("")
+    for off, data in gate["offsets"].items():
+        mark = "🟢 PASS" if data["verdict"] else "🔴 FAIL"
+        L.append(f"### offset {off} 分前: {mark}")
+        L.append("")
+        L.append("| 週 | settled | cov% | 発走後 | lag p95 | worst\\|med\\|% "
+                 "| worst P90% | worst>10% | 判定 |")
+        L.append("|---|---:|---:|---:|---:|---:|---:|---:|---|")
+        for w in data["weeks"]:
+            mk = "✅" if w["pass"] else "❌ " + "; ".join(w["fails"])
+            L.append(f"| {w['week']} | {w['settled']} | {w['coverage_pct']} | "
+                     f"{w['post_start']} | {w['lag_p95']} | {w['worst_med_pct']} | "
+                     f"{w['worst_p90_pct']} | {w['worst_gt10_pct']} | {mk} |")
+        L.append("")
+    return L
+
+
 def _md_actions(log_rows: list[dict], health: dict) -> list[str]:
     """セクション 6: アクション推奨 + フッタ。
 
@@ -550,7 +713,8 @@ def _md_actions(log_rows: list[dict], health: dict) -> list[str]:
 def render_report(start: date, end: date,
                   log_rows: list[dict],
                   health: dict,
-                  missing: list[dict]) -> str:
+                  missing: list[dict],
+                  gate: dict) -> str:
     """マークダウンレポート文字列を生成。"""
     L: list[str] = []
     L.append(f"# Weekly Drift Report ({start.isoformat()} ~ {end.isoformat()})")
@@ -566,6 +730,7 @@ def render_report(start: date, end: date,
     L.extend(_md_drift(health))
     L.extend(_md_market_health(health))
     L.extend(_md_completion(missing))
+    L.extend(_md_gate_a(gate))
     L.extend(_md_actions(log_rows, health))
     return "\n".join(L)
 
@@ -792,6 +957,29 @@ def _html_drift_health(health: dict, missing: list[dict]) -> list[str]:
     return p
 
 
+def _html_gate_a(gate: dict) -> list[str]:
+    """セクション 7: freeze gate A 判定 (offset 別サマリ)。"""
+    p: list[str] = []
+    p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
+             '7. freeze gate A (snapshot timing lock)</h3>')
+    parts = []
+    for off, data in gate["offsets"].items():
+        if data["verdict"]:
+            parts.append(f'{off}分前: <b style="color:#2a7;">PASS</b>')
+        else:
+            # 最新週の fail 理由を 1 つだけ添える
+            last = data["weeks"][-1] if data["weeks"] else {}
+            reason = (last.get("fails") or ["-"])[0]
+            parts.append(f'{off}分前: <b style="color:#c00;">FAIL</b> '
+                         f'<span style="color:#999;">({reason})</span>')
+    p.append(f'<p>{" / ".join(parts)}<br>'
+             f'<span style="color:#999; font-size:12px;">'
+             f'直近14日 missing={gate["missing_14d"]}。'
+             f'基準は CLAUDE.md 凍結基準。通過=timing固定可、収益保証ではない。'
+             f'</span></p>')
+    return p
+
+
 def _html_actions(n_races: int, health: dict) -> list[str]:
     """セクション 6 (アクション推奨) + フッタ + div 終了。
 
@@ -823,7 +1011,8 @@ def _html_actions(n_races: int, health: dict) -> list[str]:
 def render_report_html(start: date, end: date,
                        log_rows: list[dict],
                        health: dict,
-                       missing: list[dict]) -> str:
+                       missing: list[dict],
+                       gate: dict) -> str:
     """Gmail で剥がされない inline-style 版 HTML レポート。
 
     text 版と同じ情報を見やすい色付き表で表示。
@@ -842,6 +1031,7 @@ def render_report_html(start: date, end: date,
     p.extend(_html_coverage(cov))
     p.extend(_html_timing(timing))
     p.extend(_html_drift_health(health, missing))
+    p.extend(_html_gate_a(gate))
     p.extend(_html_actions(n_races, health))
     return "\n".join(p)
 
@@ -850,7 +1040,8 @@ def _send_mail_report(report: str, out_path: Path,
                       start: date, end: date,
                       log_rows: list[dict],
                       health: dict,
-                      missing: list[dict]) -> None:
+                      missing: list[dict],
+                      gate: dict) -> None:
     """--mail 指定時: サマリ入り件名 + HTML 版を付けてレポートをメール送信。"""
     try:
         from gmail_notify import send_email
@@ -887,7 +1078,7 @@ def _send_mail_report(report: str, out_path: Path,
         + (f" / 取得漏れ{len(missing)}" if missing else "")
     )
     # HTML 版を生成 (Gmail で見栄え良い表に)
-    html_body = render_report_html(start, end, log_rows, health, missing)
+    html_body = render_report_html(start, end, log_rows, health, missing, gate)
     try:
         send_email(
             subject=subject,
@@ -907,17 +1098,22 @@ def main() -> None:
     log_rows = load_snapshot_log(start, end)
     health = compute_market_health(start, end)
     missing = load_completion_missing(start, end)
+    gate = evaluate_gate_a(end)
     print(f"snapshot log rows: {len(log_rows)}")
     print(f"wedge 実測可能レース: {health['n_wedge_races']}, "
           f"取得漏れ候補: {len(missing)}")
+    print("gate A: " + ", ".join(
+        f"{off}分前={'PASS' if d['verdict'] else 'FAIL'}"
+        for off, d in gate["offsets"].items()))
 
-    report = render_report(start, end, log_rows, health, missing)
+    report = render_report(start, end, log_rows, health, missing, gate)
     out_path = Path(args.out)
     out_path.write_text(report, encoding="utf-8")
     print(f"\nReport: {out_path}")
 
     if args.mail:
-        _send_mail_report(report, out_path, start, end, log_rows, health, missing)
+        _send_mail_report(report, out_path, start, end, log_rows,
+                          health, missing, gate)
 
 
 if __name__ == "__main__":

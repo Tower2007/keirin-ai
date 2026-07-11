@@ -137,6 +137,10 @@ CSV_SCHEMAS: dict[str, list[str]] = {
         "race_date", "place_code", "race_no", "car_no",
         "p_win", "p_top2", "p_top3", "pred_rank",
         "predicted_at", "model_trained_at", "model_hash", "n_features",
+        # Codex 2026-07-11 レビュー: 後結合監査の版情報固定
+        # prediction_input_hash = 推論入力 (特徴量行列) の SHA-256 先頭 12 桁
+        # code_revision = 予測時の Git commit
+        "prediction_input_hash", "code_revision",
     ],
 }
 

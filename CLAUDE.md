@@ -138,6 +138,30 @@ production_no_odds 予測 → 組合せ確率 → live odds 結合の「配管�
 - 母数蓄積 + Phase A の最遅約定 snapshot 確定後、執行ウェッジ込み二重 EV 計算
   (snapshot odds と realized 両方) + bootstrap CI + FDR 補正で初めて採否判定。
 
+### 凍結基準 (freeze gates、Codex 2026-07-11 提案を採択)
+**「観測設定の固定」と「戦略の固定」を分離した二段階 gate。**
+数値は初期の運用規約であり、通過は収益の保証ではない。
+gate A は `weekly_drift_report.py` が毎週自動判定する (セクション 7)。
+
+```text
+A. snapshot timing lock（例: 0.5分前を採用するか）
+  - 4週連続、各週で独立した settled races >= 150
+  - planned race に対する ok coverage >= 98%
+  - 発走後取得 = 0、capture_lag_sec の p95 <= 10秒
+  - 券種×offset ごとに |median wedge| <= 1.0%
+  - 同じ母集団で P90(|wedge|) <= 5%、P(|wedge| > 10%) <= 5%
+  - 未解決 missing_results / missing_payout = 0（直近14日）
+
+B. strategy/policy lock（EV 閾値・券種を固定して shadow 評価するか）
+  - A を満たした timing だけを候補にする
+  - policy_id、校正器、候補生成規則、比較する閾値群を事前登録する
+  - strategy × offset ごとに独立 selected races >= 200、かつ4週以上
+  - 全閾値・券種の比較に FDR 補正を適用し、評価は固定後の OOS のみ
+```
+
+購入開始は B 通過後の別判断 (FDR 補正済み OOS で執行ウェッジ控除後も
+正エッジが残ることが前提)。gate を後から緩める場合は理由を CHANGELOG に記録。
+
 ### cron 登録コマンド (pre-start daemon)
 ```
 schtasks /create /tn "keirin-ai-prerace-daemon" /sc daily /st 08:00 ^

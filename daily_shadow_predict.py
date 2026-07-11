@@ -80,6 +80,38 @@ def model_hash() -> str:
     return h.hexdigest()[:12]
 
 
+def preflight_hash_check(meta: dict, mhash: str) -> None:
+    """meta 記載の model_hash と実ファイル再計算 hash を照合 (Codex 07-11)。
+
+    不意の手動置換 (例: 7/7 の無記録ロールバック) を fail-fast で検知する。
+    不一致なら予測を停止。meta に model_hash が無い旧形式は警告のみ
+    (次回 weekly_retrain 採用時から必ず付く)。
+    """
+    recorded = meta.get("model_hash")
+    if recorded is None:
+        logger.warning("meta に model_hash 無し (旧形式)。実ファイル hash=%s で続行。",
+                       mhash)
+        return
+    if recorded != mhash:
+        logger.error(
+            "model_hash 不一致: meta=%s / 実ファイル=%s — モデルファイルが "
+            "meta と別物に置換されている。予測を停止。weekly_model/MANIFEST.md を確認せよ。",
+            recorded, mhash)
+        sys.exit(1)
+
+
+def code_revision() -> str:
+    """現在の Git commit (取得不能なら unknown)。"""
+    try:
+        import subprocess
+        return subprocess.run(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            capture_output=True, text=True, cwd=str(PROJECT_ROOT), timeout=10,
+        ).stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
 def load_day_dataset(target_date: str) -> pd.DataFrame:
     """当日分のみの dataset を ml_baseline.build_dataset で構築。
 
@@ -121,19 +153,9 @@ def main() -> None:
     feat_cols = meta["feature_columns"]
     trained_at = meta.get("trained_at", "")
     mhash = model_hash()
+    preflight_hash_check(meta, mhash)
     logger.info("=== shadow predict: date=%s model=%s (%s, %d feats) ===",
                 target_date, mhash, trained_at, len(feat_cols))
-
-    # 再実行安全: 同一日 × 同一モデルが既にあればスキップ
-    out_path = DATA_DIR / OUT_NAME
-    if out_path.exists() and not args.force:
-        existing = pd.read_csv(
-            out_path, usecols=["race_date", "model_hash"], dtype=str)
-        if ((existing["race_date"] == target_date)
-                & (existing["model_hash"] == mhash)).any():
-            logger.info("既に予測済み (date=%s, model=%s)。スキップ。",
-                        target_date, mhash)
-            return
 
     df = load_day_dataset(target_date)
     if len(df) == 0:
@@ -145,12 +167,52 @@ def main() -> None:
                      len(feat_cols), len(missing), missing[:10])
         sys.exit(1)
 
+    # 再実行安全 (Codex 07-11 指摘で改善): 旧実装は同一日×同一 hash の行が
+    # 「1 行でも」あれば日全体を skip し、7:30 時点の出走表が部分取得だと
+    # 部分予測が永久に残った。期待 (race, car) 集合との差分で判定し、
+    # 不足があれば欠けたレースだけ補完する。
+    out_path = DATA_DIR / OUT_NAME
+    if out_path.exists() and not args.force:
+        existing = pd.read_csv(
+            out_path,
+            usecols=["race_date", "place_code", "race_no", "car_no",
+                     "model_hash"],
+            dtype=str)
+        done = existing[(existing["race_date"] == target_date)
+                        & (existing["model_hash"] == mhash)]
+        done_keys = set(map(tuple, done[
+            ["race_date", "place_code", "race_no", "car_no"]].astype(str).values))
+        expect = df[["race_date", "place_code", "race_no", "car_no"]].astype(str)
+        expect_keys = set(map(tuple, expect.values))
+        lack = expect_keys - done_keys
+        if not lack:
+            logger.info("既に完全予測済み (date=%s, model=%s, %d rows)。スキップ。",
+                        target_date, mhash, len(expect_keys))
+            return
+        if done_keys:
+            # 欠けたレースだけ補完 (レース単位で絞る)
+            lack_races = {(k[0], k[1], k[2]) for k in lack}
+            mask = expect.apply(
+                lambda r: (r["race_date"], r["place_code"], r["race_no"])
+                in lack_races, axis=1)
+            df = df[mask.values].copy()
+            logger.info("部分予測を検出: 不足 %d レースのみ補完 (既存 %d 行は保持)",
+                        len(lack_races), len(done_keys))
+
     models = {
         t: lgb.Booster(model_file=str(MODEL_DIR / f"ml_weekly_model_{t}.lgb"))
         for t in TARGETS
     }
     predicted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     X = df[feat_cols]
+    # 推論入力の hash (Codex 07-11): 後結合監査で「この予測は正確にこの入力から
+    # 出た」を固定する。キー順ソート済み CSV バイト列の SHA-256 先頭 12 桁。
+    sorted_df = df.sort_values(
+        ["race_date", "place_code", "race_no", "car_no"])
+    input_hash = hashlib.sha256(
+        sorted_df[feat_cols].to_csv(index=False).encode("utf-8")
+    ).hexdigest()[:12]
+    revision = code_revision()
     preds = {t: m.predict(X, num_iteration=m.best_iteration)
              for t, m in models.items()}
 
@@ -168,6 +230,8 @@ def main() -> None:
             "model_trained_at": trained_at,
             "model_hash": mhash,
             "n_features": len(feat_cols),
+            "prediction_input_hash": input_hash,
+            "code_revision": revision,
         })
     n = append_rows(OUT_NAME, rows)
     n_races = df.groupby(["race_date", "place_code", "race_no"]).ngroups

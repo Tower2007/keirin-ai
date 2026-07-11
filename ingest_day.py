@@ -3,16 +3,29 @@
 Phase 1: 開催メタ + 出走表 + ライン情報
 Phase 2: 選手成績 (JSJ002) + 結果 + 払戻 (JSJ012、レース完了分のみ)
 
+per-race 自己治癒 (2026-07-11 Codex レビュー対応):
+  旧実装は results セクションを venue-day 単位で skip したため、一部レースだけ
+  取得できた日は残りが永久欠損した。index 無し呼び出し (日次 cron / 手動 /
+  recover_missing_races.py) では per-race 完了状態を確認し、
+    - results 行が全く無いレース        → JSJ012 再取得 (results+payouts 追記)
+    - 着順ありだが払戻が無いレース      → JSJ012 再取得 (payouts のみ追記)
+  を行う。append のみで重複を作らない範囲に限定 (置換はしない)。
+  中止レース (results 行ありだが着順ゼロの ghost 行) は正当欠損として触らない。
+  index 付き呼び出し (backfill) は従来の venue-day 粒度のまま (性能優先、
+  初回取得が仕事であり回復は recover スクリプトの責務)。
+
 使い方:
   python ingest_day.py YYYY-MM-DD placeCode
   python ingest_day.py 2026-04-25 42      # 名古屋
 """
 
+import csv
 import sys
 import logging
 from datetime import date as _date
 
 from src.client import KeirinClient, VENUE_CODES
+from src.config import DATA_DIR
 from src.parser import (
     extract_json_data,
     parse_program_meta,
@@ -87,35 +100,106 @@ def _ingest_stats(client: KeirinClient, place_code: int, race_date: str,
         logger.error("  JSJ002 (race_stats) failed: %s", e)
 
 
+def _per_race_state(place_code: int, race_date: str) -> tuple[set, set, set]:
+    """当該 venue-day の per-race 状態を CSV 走査で返す。
+
+    返り値: (results_rows あり race_no 集合,
+             着順 (tyaku 非空) あり race_no 集合,
+             payouts あり race_no 集合)
+    """
+    pc = str(place_code)
+    res_rows: set[str] = set()
+    settled: set[str] = set()
+    pays: set[str] = set()
+    res_path = DATA_DIR / "race_results.csv"
+    if res_path.exists():
+        with open(res_path, "r", encoding="utf-8", newline="") as f:
+            for r in csv.DictReader(f):
+                if r.get("race_date") != race_date or r.get("place_code") != pc:
+                    continue
+                rn = r.get("race_no", "")
+                res_rows.add(rn)
+                if str(r.get("tyaku", "")).strip():
+                    settled.add(rn)
+    pay_path = DATA_DIR / "payouts.csv"
+    if pay_path.exists():
+        with open(pay_path, "r", encoding="utf-8", newline="") as f:
+            for r in csv.DictReader(f):
+                if r.get("race_date") == race_date and r.get("place_code") == pc:
+                    pays.add(r.get("race_no", ""))
+    return res_rows, settled, pays
+
+
+def compute_result_gaps(place_code: int, race_date: str) -> tuple[set, set]:
+    """per-race の欠損を返す (recover_missing_races.py からも使用)。
+
+    返り値: (results_gap, payout_gap)
+      results_gap = 着順ありでも行すらも無い race_no (JSJ012 全体を再取得)
+        ※ 期待レース集合はここでは不明 (entries 走査は呼び出し側 or
+           program["races"] で判定)。ここでは「results 行あり集合」を基準に
+           _ingest_results_and_payouts 側で finished_races と突合する。
+      payout_gap  = 着順ありなのに payouts が無い race_no (payouts のみ追記)
+    中止レース (行ありだが着順ゼロ) はどちらにも入らない (正当欠損)。
+    """
+    res_rows, settled, pays = _per_race_state(place_code, race_date)
+    payout_gap = settled - pays
+    return res_rows, payout_gap
+
+
 def _ingest_results_and_payouts(client: KeirinClient, place_code: int,
                                 race_date: str, races: list[dict],
                                 index: RaceDayIndex | None,
-                                counts: dict[str, int]) -> None:
-    """結果 + 払戻 (JSJ012) をレース完了分のみ per-race で取得して追記。"""
+                                counts: dict[str, int],
+                                existing_res_rows: set | None = None,
+                                payout_gap: set | None = None) -> None:
+    """結果 + 払戻 (JSJ012) をレース完了分のみ per-race で取得して追記。
+
+    existing_res_rows / payout_gap が渡された場合 (per-race 自己治癒モード):
+      - results 行が既にあるレースは results を追記しない (重複防止)
+      - payout_gap のレースは payouts のみ追記
+      - 両方揃っているレースは fetch もしない
+    """
     finished_races = [r for r in races if r.get("race_end")]
-    if finished_races:
-        logger.info("  Fetching results for %d finished races", len(finished_races))
-        results_added = 0
-        for race in finished_races:
-            r_no = race["race_no"]
-            r_enc = race["enc_para_r"]
-            if not r_enc:
-                continue
-            try:
-                jsj012 = client.get_race_result(r_enc)
-                if jsj012.get("resultCd") == 0:
+    if not finished_races:
+        logger.info("  No finished races (skip results/payouts)")
+        return
+
+    heal_mode = existing_res_rows is not None
+    if heal_mode:
+        payout_gap = payout_gap or set()
+        targets = [r for r in finished_races
+                   if str(r["race_no"]) not in existing_res_rows
+                   or str(r["race_no"]) in payout_gap]
+        if not targets:
+            logger.info("  Results/payouts complete per-race (nothing to heal)")
+            return
+        logger.info("  Healing %d races (results_gap or payout_gap)", len(targets))
+    else:
+        targets = finished_races
+        logger.info("  Fetching results for %d finished races", len(targets))
+
+    results_added = 0
+    for race in targets:
+        r_no = race["race_no"]
+        r_enc = race["enc_para_r"]
+        if not r_enc:
+            continue
+        skip_results = heal_mode and str(r_no) in existing_res_rows
+        try:
+            jsj012 = client.get_race_result(r_enc)
+            if jsj012.get("resultCd") == 0:
+                payouts = parse_payouts(place_code, race_date, r_no, jsj012)
+                if not skip_results:
                     results = parse_race_results(place_code, race_date, r_no, jsj012)
-                    payouts = parse_payouts(place_code, race_date, r_no, jsj012)
                     n_res = append_rows("race_results.csv", results)
                     counts["results"] = counts.get("results", 0) + n_res
-                    counts["payouts"] = counts.get("payouts", 0) + append_rows("payouts.csv", payouts)
                     results_added += n_res
-            except Exception as e:
-                logger.error("  JSJ012 R%d failed: %s", r_no, e)
-        if index is not None and results_added > 0:
-            index.mark("race_results.csv", place_code, race_date)
-    else:
-        logger.info("  No finished races (skip results/payouts)")
+                counts["payouts"] = counts.get("payouts", 0) + append_rows(
+                    "payouts.csv", payouts)
+        except Exception as e:
+            logger.error("  JSJ012 R%d failed: %s", r_no, e)
+    if index is not None and results_added > 0:
+        index.mark("race_results.csv", place_code, race_date)
 
 
 def ingest_one_day(client: KeirinClient, place_code: int, race_date: str,
@@ -144,7 +228,17 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str,
     # past date は lines (PJ0305 nInfo) が取得不能なので、lines を必須から外す。
     is_past = race_date < _date.today().isoformat()
     lines_ok = has_lines or is_past
-    if has_meta and has_entries and lines_ok and has_stats and has_results:
+    # per-race 自己治癒 (index 無し呼び出しのみ): venue-day に results 行があっても
+    # 「着順ありなのに払戻無し」のレースが残っていれば skip しない。
+    # results 行が無いレース (missing_results) は program 取得後に判明するため
+    # ここでは payout_gap だけで fast-path を解除する (results_gap は後段で処理)。
+    existing_res_rows: set | None = None
+    payout_gap: set | None = None
+    heal_mode = index is None and has_results and is_past
+    if heal_mode:
+        existing_res_rows, payout_gap = compute_result_gaps(place_code, race_date)
+    if (has_meta and has_entries and lines_ok and has_stats and has_results
+            and not heal_mode):
         logger.info("Already complete: %s place=%d, skipping", race_date, place_code)
         return {"skipped": True}
 
@@ -208,6 +302,12 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str,
     if not has_results:
         _ingest_results_and_payouts(client, place_code, race_date,
                                     program["races"], index, counts)
+    elif heal_mode:
+        # per-race 自己治癒: 行が無いレース + 払戻欠損レースだけ再取得
+        _ingest_results_and_payouts(client, place_code, race_date,
+                                    program["races"], index, counts,
+                                    existing_res_rows=existing_res_rows,
+                                    payout_gap=payout_gap)
 
     logger.info("=== Done: %s %s ===", race_date, venue)
     for name, count in sorted(counts.items()):

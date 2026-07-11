@@ -7,6 +7,79 @@ Codex の意見・所感を追記式で蓄積する。
 
 ---
 
+## 2026-07-11: 監査対応報告の再レビュー
+
+依頼書: `Opinion/codex_briefs/2026-07-11_audit_response_report.md`
+
+コミット `f4210cf` の差分と、報告書に記載された定量結果を確認した。重複 198 件の除去、`n=2,305` からユニーク 485 レースへの是正、無記録ロールバックの SHA-256 による確定は、先の監査内容と整合する。P1 のうち観測・記録面は大きく前進した。
+
+ただし P1-3 は「欠損を検知できる」状態までで、再取得によって将来欠損を防ぐ制御は未実装である。完了と呼ぶなら `ingest_day.py` の venue-day 粗粒度 skip も per-race completion を参照する必要がある。この一点は、報告上も「検知完了・回復未完」と分けて扱うのが正確である。
+
+### 1. P1-4: shadow を offset 別に実体化しない設計
+
+**条件付きで賛成**。`no_odds` モデルの車番別予測が朝時点で確定し、変動するのがオッズだけなら、ML を daemon から分離する判断は堅牢性の面で正しい。`shadow_predictions.csv` に `predicted_at`、`model_trained_at`、`model_hash` を残す実装も適切である (`daily_shadow_predict.py:152-170`)。この構造なら、予測の監査とオッズ収集障害を分離できる。
+
+ただし「任意 offset の EV 候補を**完全に**監査再現できる」は現時点では少し強い。今保存されるのは車番別確率であり、後結合時に必要な次の版情報がまだ固定されていない。
+
+- `policy_id` / `policy_hash`: 組合せ生成、確率合成、校正器、EV 閾値、券種除外の版
+- `prediction_input_hash`: 当日 `entries/stats/meta` から作った推論データセットのハッシュ
+- `code_revision`: 少なくとも Git commit
+- `snapshot_dt` と対象オッズ行のハッシュ、`selected` 判定、候補ごとの EV
+
+これは daemon に ML を入れる理由にはならない。推奨は別プロセスの
+`materialize_shadow_decisions.py` である。各 snapshot 後に、上記の不変な policy を使い、`prediction_key × snapshot_key -> candidate/selected` を append-only に保存する。購入はせずとも「その瞬間に何を選んだか」を残せる。後日生成する場合も、policy と入力のハッシュを先に固定すれば監査可能だが、結果を見た後に閾値を変える余地は残さない。
+
+また `daily_shadow_predict.py:127-136` は同日・同一 model_hash の**行が一つでも**あれば日全体を skip する。7:30 時点の出走表が部分取得だった場合、部分的な予測が永久に残る。skip 条件は「当日の期待 `(race, car)` 集合が全て存在すること」にし、不足なら欠けた race だけ補完または同一 run を明示的に置換するべきである。これを入れれば shadow 経路は実運用の監査台帳として十分強くなる。
+
+### 2. P1-3: per-race 再取得と過去 288 件
+
+優先度は二つに分ける。
+
+1. **per-race 再取得の実装は高優先度**。shadow 蓄積を止める必要はないが、次の小タスクとして着手する。`build_race_completion.py` は missing を可視化するだけであり (`build_race_completion.py:21-23`)、現 `ingest_day.py:34-46, 115-116` の coarse skip を残したままでは同じ型の欠損が再発しても自動回復しない。
+2. **過去 288 件の一括 backfill は中優先度**。学習母数への影響は小さいので、shadow/時点評価を待たせない。先に missing_results / missing_payout、年代、会場を層化して 20〜30 レースを試行し、取得結果を `recovered / canceled_confirmed / still_missing / parse_error` に固定記録する。その結果で idempotent な全288件再取得を行う。
+
+再取得は append だけでは重複を作るので、対象 `(date, place, race_no)` の results/payouts を一貫して置換する必要がある。失敗時も completion status と取得時刻・エラー種別を残す。個別中止で result 行自体が無い可能性は残るため、missing を直ちに取得失敗と断定しない現在の表現は正しい。
+
+### 3. 残 P2 の優先順位
+
+残三件だけで並べるなら、次の順を勧める。
+
+1. **環境固定** (`pyproject.toml` + `uv.lock` + 再現手順)。新設した shadow/週次処理を別環境で再実行できない状態は、モデル hash を残しても検証可能性を欠く。依存追加・固定は運用方針に関わるため、実施時はユーザー承認の上で行う。
+2. **バックアップ manifest と検証**。過去データは再取得不能なものを含む。ZIP 作成後の `testzip`、SHA-256 manifest、コピー先の検証成功後にのみ世代削除、の順にする。
+3. **W のレンジ評価統一**。当面 W を weekly wedge から除外したのは正しい。`phase_ac_analysis.py` も中点と上下限を併記する方式へ統一するか、W を明示除外する。W を使うモデル／券種選択を再開する前までに終えればよい。
+
+補足として、`weekly_drift_report.py:108-115` は `usecols` 化でメモリ使用量を大きく減らしたが、CSV 全体を走査してから日付で絞っている。365MB 全読の問題は**緩和済みで未解決**であり、日付パーティションまたは週次集約テーブルは中期課題として残る。
+
+### 4. freeze 基準は今定義すべきか
+
+**定義すべき。ただし「購入開始基準」ではなく、まず「観測設定を固定してよい基準」と「戦略を固定して評価を始める基準」を分離する。** `races>=50` はレポート表示の最低観測数としてはよいが、freeze の数値基準には足りない。
+
+提案する二段階 gate は以下。
+
+```text
+A. snapshot timing lock（例: 0.5分前を採用するか）
+  - 4週連続、各週で独立した settled races >= 150
+  - planned race に対する ok coverage >= 98%
+  - 発走後取得 = 0、capture_lag_sec の p95 <= 10秒
+  - 券種×offset ごとに |median wedge| <= 1.0%
+  - 同じ母集団で P90(|wedge|) <= 5%、P(|wedge| > 10%) <= 5%
+  - 未解決 missing_results / missing_payout = 0（直近14日）
+
+B. strategy/policy lock（EV 閾値・券種を固定して shadow 評価するか）
+  - A を満たした timing だけを候補にする
+  - policy_id、校正器、候補生成規則、比較する閾値群を事前登録する
+  - strategy × offset ごとに独立 selected races >= 200、かつ4週以上
+  - 全閾値・券種の比較に FDR 補正を適用し、評価は固定後の OOS のみ
+```
+
+数値は初期の運用規約であり、最初から「収益の保証」と読ませないことが重要。現在の0.5分前 ST2 の `|wedge|>10%=3.6%` は有望な途中結果だが、1週・471レースでは A の4週条件を満たしていない。まず A を満たした時点で timing を固定し、その後に B の shadow 評価を始める順序が、探索の自由度と監査可能性を両立する。
+
+### 追加の小さな残課題
+
+manifest は前進だが、推論時に `meta["model_hash"]` と実ファイルから再計算した hash を照合していない (`daily_shadow_predict.py:119-123`)。不意の手動置換を fail-fast にするため、両者不一致なら予測を停止する preflight を追加したい。採用処理も、モデル群・meta・manifest を一時ディレクトリで完成させてから切替えると、次のロールバック監査がさらに強くなる。
+
+---
+
 ## 2026-05-15: 多モデル化 + odds 降格 + snapshot timing 設計レビュー
 
 依頼書: `Opinion/codex_briefs/2026-05-15_multi_model_and_odds_demotion.md`
