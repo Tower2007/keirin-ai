@@ -41,7 +41,13 @@ from sklearn.metrics import roc_auc_score, mean_absolute_error
 
 from src.config import DATA_DIR as DATA
 
-sys.stdout.reconfigure(encoding="utf-8")
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    # pythonw 起動 (Task Scheduler) では sys.stdout=None のため素の reconfigure が
+    # AttributeError で即死する。本モジュールを import する daily_shadow_predict 等の
+    # pythonw タスクを無音死 (exit 1・ログ皆無) させないようガード。
+    pass
 
 # ⚠️ オッズ特徴量 (Phase 6 6a-3 upper-bound 用)
 # race_odds.csv の official_dt は st_time + 0〜5 分のため運用リーケージあり。
