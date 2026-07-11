@@ -68,6 +68,19 @@ def main() -> None:
         summary["errors"],
     )
 
+    # 完了台帳の更新 (2026-07-11 艦隊監査 P1): results/payouts を取り込んだ
+    # 直後に race_completion.csv を実態に整合させる。旧運用は週次 retrain の
+    # --days 30 のみで、取込済みレースが最長 1 週間 missing_results のまま残り
+    # 週次 drift レポートが誤警告していた。台帳更新の失敗は収集の成否に
+    # 影響させない (次回 cron / 週次 retrain でも再計算されるため)。
+    try:
+        from build_race_completion import refresh
+        days = max((date.today() - date.fromisoformat(target_date)).days + 1, 3)
+        n = len(refresh(days=days))
+        logger.info("race_completion.csv refreshed (days=%d, %d races)", days, n)
+    except Exception as e:
+        logger.error("race_completion refresh failed: %s", e)
+
 
 if __name__ == "__main__":
     main()

@@ -159,7 +159,16 @@ def main() -> None:
     summary = pd.DataFrame(log_rows)["outcome"].value_counts()
     print("\n=== 結果 (recovery_log.csv に記録) ===")
     print(summary.to_string())
-    print("\n次: build_race_completion.py を再実行して completion を更新すること")
+
+    # 完了台帳の更新 (2026-07-11 艦隊監査 P1): 救済直後に自動で整合させる。
+    # 対象は任意の過去日なので全期間再構築 (数十秒、race_odds は読まない)。
+    try:
+        from build_race_completion import refresh
+        n = len(refresh(days=None))
+        print(f"\nrace_completion.csv refreshed ({n:,} races)")
+    except Exception as e:
+        print(f"\n[warn] race_completion refresh failed: {e} — "
+              "build_race_completion.py を手動実行すること", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,35 @@
 # CHANGELOG
 
+## 2026-07-12 (Codex 艦隊監査 7/11 の P1/P3 対応)
+
+- **P1: 結果/払戻の取込後に完了台帳 (race_completion.csv) が更新されない問題を修正**
+  (`ingest_day.py:15` 指摘)。旧運用は週次 retrain の `--days 30` のみで台帳を再構築
+  していたため、取込済みレースが最長 1 週間 `missing_results` のまま残り、
+  週次 drift レポート (セクション 5 / gate A の missing_14d) が誤警告していた。
+  - `build_race_completion.py` に `refresh(days)` を新設 (CLI と同一ロジックの
+    関数化、stdout 出力なし = pythonw/cron 安全) し、取込経路 3 本に接続:
+    - `ingest_yesterday.py` (日次 5:00 cron): 全場ループ後に自動 refresh
+    - `ingest_day.py main()` (手動 ingest / per-race 自己治癒): results/payouts を
+      追記した場合のみ refresh
+    - `recover_missing_races.py` (救済 backfill): 実行後に全期間 refresh
+      (旧「手動で再実行すること」の運用メモを自動化に置換)
+    - refresh 失敗は収集の成否に影響させない (log/警告のみ、次回 cron で再計算)。
+    backfill の連続呼び出し (`ingest_one_day` + index) は従来どおり呼ばない。
+  - **台帳の実態整合: stale 行 72 件を complete に是正** (missing_results 205→133)。
+    全て 2026-07-11 分 (7 場、監査指摘の特定 3 レースを含む。監査時点でデータが
+    あったのは 3 レース、残 69 は 7/12 朝 5:00 cron の取込後に stale 化していた)。
+    是正後の残 missing 136 件は全て実データ不在の正当な取得漏れ候補
+    (2021〜2026-06、直近 14 日は 0 件)。
+  - dry-run 確認 (`weekly_drift_report.py --days 7`、メールなし・--out スクラッチ):
+    「取得漏れ候補: 0」「直近 14 日の未解決 missing: 0」で誤警告消失。
+    gate A の判定基準・凍結基準そのものは不変 (missing の実態が直ったのみ)。
+  - 回帰テスト追加: `tests/test_race_completion.py` (取込後 refresh で
+    missing_results→complete、days 差分更新の窓外行保持、全期間再構築)。
+- **P3: `phase_ac_analysis.py:13` の無効エスケープ (`\k`) を docstring の raw 文字列化で解消**
+  (Python 3.12+ の SyntaxWarning。`-W error` でコンパイル確認済)。
+- 本番モデル・shadow 予測経路・gate A 基準は不変。スクレイプ/メール送信なし
+  (台帳是正は既存 CSV からの再導出のみ)。
+
 ## 2026-07-11 (多角監査 P1/P2 対応、Codex 条件付き承認)
 
 - **P1: 週次メール HTML の未定義 `HTML_TD` 参照 3 箇所を修正** (`weekly_drift_report.py`

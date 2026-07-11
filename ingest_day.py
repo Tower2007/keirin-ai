@@ -22,6 +22,13 @@ per-race 自己治癒 (2026-07-11 Codex レビュー対応):
   - index 付き呼び出し (backfill / 日次 cron) は従来の venue-day 粒度
     (性能優先、初回取得が仕事であり回復は recover スクリプトの責務)。
 
+  完了台帳 (race_completion.csv) の鮮度 (2026-07-11 艦隊監査 P1):
+  結果/払戻を追記した取込の直後に build_race_completion.refresh() を呼び、
+  台帳を実態に整合させる。日次 cron は ingest_yesterday.py が、救済は
+  recover_missing_races.py が、手動 ingest は本スクリプト main() が呼ぶ
+  (ingest_one_day 自体は呼ばない — backfill の連続呼び出しで毎回
+  再構築しないため。backfill 後は build_race_completion.py を手動実行)。
+
 使い方:
   python ingest_day.py YYYY-MM-DD placeCode
   python ingest_day.py 2026-04-25 42      # 名古屋
@@ -332,7 +339,21 @@ def main() -> None:
     race_date = sys.argv[1]
     place_code = int(sys.argv[2])
     client = KeirinClient()
-    ingest_one_day(client, place_code, race_date)
+    counts = ingest_one_day(client, place_code, race_date)
+
+    # 完了台帳の更新 (2026-07-11 艦隊監査 P1): 結果/払戻を追記した場合は
+    # race_completion.csv を実態に整合させる (stale な missing_* を残さない)。
+    # 日次 cron は ingest_yesterday.py 側で、救済は recover_missing_races.py
+    # 側でそれぞれ refresh するため、ここは手動 ingest (heal 含む) 用。
+    if counts.get("results") or counts.get("payouts"):
+        try:
+            from build_race_completion import refresh
+            days = max(
+                (_date.today() - _date.fromisoformat(race_date)).days + 1, 3)
+            refresh(days=days)
+            logger.info("race_completion.csv refreshed (days=%d)", days)
+        except Exception as e:
+            logger.error("race_completion refresh failed: %s", e)
 
 
 if __name__ == "__main__":
