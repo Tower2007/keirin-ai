@@ -117,11 +117,26 @@ CSV_SCHEMAS: dict[str, list[str]] = {
     ],
     # prerace snapshot 取得試行ログ (成功/失敗、リトライ管理用)。
     # status: ok / no_odds / fail
-    # target_offset_min で 5/3/2 分前 snapshot を識別 (dedup キーにも含む)。
+    # target_offset_min で 5/3/2/1/0.5 分前 snapshot を識別 (dedup キーにも含む)。
+    # 秒精度 3 列 (2026-07-11 監査 P1-5 対応):
+    #   scheduled_snapshot_dt = st_time - target_offset (予定時刻)
+    #   seconds_before_start  = (st_time - 実測 snapshot_dt) 秒 (負 = 発走後取得)
+    #   capture_lag_sec       = (実測 - 予定) 秒 (スケジュール遅延)
+    # minutes_before_start は丸め整数のため 0.5 分 offset の厳密判定には使わない。
     "prerace_snapshot_log.csv": [
         "race_date", "place_code", "race_no",
         "st_time", "snapshot_dt", "minutes_before_start", "target_offset_min",
         "status", "n_rows", "note",
+        "scheduled_snapshot_dt", "seconds_before_start", "capture_lag_sec",
+    ],
+    # shadow 推論ログ (2026-07-11 監査 P1-4 対応)。
+    # 「その時点で実際に使えた予測」を監査するため、当日朝にモデル版・hash 付きで
+    # per-car 確率を固定保存する (購入なし)。offset 別 EV 候補は本ログ ×
+    # race_odds_prerace (双方に時点記録あり) の後結合で監査再現できる。
+    "shadow_predictions.csv": [
+        "race_date", "place_code", "race_no", "car_no",
+        "p_win", "p_top2", "p_top3", "pred_rank",
+        "predicted_at", "model_trained_at", "model_hash", "n_features",
     ],
 }
 

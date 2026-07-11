@@ -84,24 +84,110 @@ def load_snapshot_log(start: date, end: date) -> list[dict]:
     return rows
 
 
-def load_prerace_odds(start: date, end: date) -> list[dict]:
-    """live snapshot odds (race_odds_prerace.csv) を期間で絞り込み読み込み。
+def compute_market_health(start: date, end: date) -> dict:
+    """実測ドリフト (settlement wedge) + overround を期間集計 (監査 P1-1 対応)。
 
-    ⚠️ 蓄積が進むと race_odds_prerace.csv は数 GB になり得る。
-    最初の skeleton では全行読みで OK だが、後で chunk 読みに切り替えたい。
+    旧 load_prerace_odds の list[dict] 全読みを廃止し、pandas usecols の
+    部分読みに変更 (365MB 全行 dict 化はメモリ事故のもと、監査 P2)。
+
+    返り値 dict:
+      wedge   : [{bet, offset, n_races, median_pct, gt10_pct, adverse_pct}]
+                wedge = 実現配当(payout/100) / snapshot odds - 1 (当選組のみ)
+      overround: [{bet, n_races, ov_median}] (最新 snapshot dedup 後の Σ1/odds)
+      n_wedge_races: wedge を測れたユニークレース数 (gate 判定用)
+
+    W (ワイド) はレンジオッズで点 wedge が定義できないため除外 (監査 P2)。
     """
+    import pandas as pd
     path = DATA_DIR / "race_odds_prerace.csv"
+    empty = {"wedge": [], "overround": [], "n_wedge_races": 0}
+    if not path.exists():
+        return empty
+    keys = ["race_date", "place_code", "race_no"]
+    jkeys = keys + ["bet_type", "kumi_ban"]
+    odds = pd.read_csv(
+        path,
+        usecols=jkeys + ["odds", "snapshot_dt", "target_offset_min"],
+        dtype={k: str for k in jkeys}, low_memory=False)
+    odds = odds[(odds["race_date"] >= start.isoformat())
+                & (odds["race_date"] <= end.isoformat())]
+    odds["odds"] = pd.to_numeric(odds["odds"], errors="coerce")
+    odds = odds[(odds["odds"] > 0) & (odds["bet_type"] != "W")]
+    if len(odds) == 0:
+        return empty
+
+    pay = pd.read_csv(
+        DATA_DIR / "payouts.csv", usecols=jkeys + ["payout"],
+        dtype={k: str for k in jkeys}, low_memory=False)
+    pay = pay[(pay["race_date"] >= start.isoformat())
+              & (pay["race_date"] <= end.isoformat())]
+    pay["payout"] = pd.to_numeric(pay["payout"], errors="coerce")
+    pay = pay[pay["payout"] > 0].drop_duplicates(subset=jkeys)
+
+    # --- wedge (offset 別、当選組) ---
+    m = odds.merge(pay, on=jkeys, how="inner")
+    m["wedge"] = (m["payout"] / 100.0) / m["odds"] - 1.0
+    m["off"] = pd.to_numeric(m["target_offset_min"], errors="coerce")
+    wedge_rows = []
+    for (bt, off), g in m.groupby(["bet_type", "off"]):
+        w = g["wedge"].dropna()
+        if len(w) == 0:
+            continue
+        wedge_rows.append({
+            "bet": bt, "offset": _parse_offset(off),
+            "n_races": int(g[keys].drop_duplicates().shape[0]),
+            "median_pct": round(float(w.median()) * 100, 2),
+            "gt10_pct": round(float((w.abs() > 0.10).mean()) * 100, 1),
+            "adverse_pct": round(float((w < 0).mean()) * 100, 1),
+        })
+    wedge_rows.sort(key=lambda r: (r["bet"], -float(r["offset"])))
+    n_wedge_races = int(m[keys].drop_duplicates().shape[0])
+
+    # --- overround (最新 snapshot に dedup 後の Σ1/odds) ---
+    o = odds.sort_values("snapshot_dt").drop_duplicates(subset=jkeys, keep="last")
+    o["imp"] = 1.0 / o["odds"]
+    ov = o.groupby(keys + ["bet_type"])["imp"].sum().reset_index(name="ov")
+    ov_rows = [
+        {"bet": bt, "n_races": int(len(g)),
+         "ov_median": round(float(g["ov"].median()), 4)}
+        for bt, g in ov.groupby("bet_type")
+    ]
+    return {"wedge": wedge_rows, "overround": ov_rows,
+            "n_wedge_races": n_wedge_races}
+
+
+def count_unique_ok_races(log_rows: list[dict]) -> int:
+    """ok snapshot が 1 つ以上あるユニークレース数 (gate 判定用、監査 P1-1)。
+
+    旧実装は offset 合算の ok 行数 (同一レースを最大 5 重カウント) を
+    「n」として freeze 判定していた。独立サンプルはレースなのでこちらを使う。
+    """
+    return len({
+        (r.get("race_date", ""), r.get("place_code", ""), r.get("race_no", ""))
+        for r in log_rows if r.get("status") == "ok"
+    })
+
+
+def load_completion_missing(start: date, end: date) -> list[dict]:
+    """race_completion.csv から期間内の取得漏れ候補を返す (監査 P1-3)。
+
+    当日は results が構造的に未取得 (翌朝 5:00 cron) なので除外。
+    canceled は正当な欠損 (着順なし=中止、全期間で 100% 払戻なしと実証済) なので
+    取得漏れには数えない。
+    """
+    path = DATA_DIR / "race_completion.csv"
     if not path.exists():
         return []
+    today_iso = date.today().isoformat()
     rows = []
     with open(path, "r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        for r in reader:
-            try:
-                rd = date.fromisoformat(r["race_date"])
-            except (ValueError, KeyError):
+        for r in csv.DictReader(f):
+            rd = r.get("race_date", "")
+            if not (start.isoformat() <= rd <= end.isoformat()):
                 continue
-            if start <= rd <= end:
+            if rd >= today_iso:
+                continue
+            if str(r.get("status", "")).startswith("missing"):
                 rows.append(r)
     return rows
 
@@ -372,59 +458,89 @@ def _md_timing(log_rows: list[dict]) -> list[str]:
     return L
 
 
-def _md_drift(odds_rows: list[dict]) -> list[str]:
-    """セクション 3: live odds vs final odds drift。"""
+def _md_drift(health: dict) -> list[str]:
+    """セクション 3: 実測 settlement wedge (snapshot odds → 確定配当の乖離)。"""
     L: list[str] = []
-    L.append("## 3. live odds ↔ final odds drift")
+    L.append("## 3. 実測ドリフト (settlement wedge, 当選組)")
     L.append("")
-    if not odds_rows:
-        L.append("⚠️ 未蓄積。蓄積開始後、target_offset_min 別に")
-        L.append("`live_odds_min_st2_1st` と `final_odds_min_st2_1st` の比較表を表示。")
+    L.append("wedge = 実現配当(payout/100) / snapshot odds − 1。median<0 = 当選側で不利。")
+    L.append("W はレンジオッズで点 wedge が定義できないため除外。")
+    L.append("")
+    if not health["wedge"]:
+        L.append("⚠️ 期間内に wedge を測れる (snapshot ∩ 当選組) データなし。")
+    else:
+        L.append("| 券種 | offset (分前) | n_races | median wedge% | \\|w\\|>10% | 不利% |")
+        L.append("|---|---:|---:|---:|---:|---:|")
+        for r in health["wedge"]:
+            L.append(f"| {r['bet']} | {r['offset']} | {r['n_races']} | "
+                     f"{r['median_pct']} | {r['gt10_pct']} | {r['adverse_pct']} |")
+    L.append("")
+    return L
+
+
+def _md_market_health(health: dict) -> list[str]:
+    """セクション 4: Market Health (overround)。"""
+    L: list[str] = []
+    L.append("## 4. Market Health (overround)")
+    L.append("")
+    L.append("最新 snapshot dedup 後の Σ(1/odds)。基準 ≈1.34 (控除率25%)。")
+    L.append("大きく外れたら odds 取得/dedup の破損を疑う。")
+    L.append("")
+    if not health["overround"]:
+        L.append("⚠️ 期間内データなし。")
+    else:
+        L.append("| 券種 | n_races | overround median |")
+        L.append("|---|---:|---:|")
+        for r in health["overround"]:
+            flag = "" if 1.25 <= r["ov_median"] <= 1.45 else " ⚠️"
+            L.append(f"| {r['bet']} | {r['n_races']} | {r['ov_median']}{flag} |")
+    L.append("")
+    return L
+
+
+def _md_completion(missing: list[dict]) -> list[str]:
+    """セクション 5: per-race 完了状態 (取得漏れ候補、監査 P1-3)。"""
+    L: list[str] = []
+    L.append("## 5. per-race 完了状態 (取得漏れ候補)")
+    L.append("")
+    L.append("race_completion.csv より。canceled (着順なし=中止) は正当欠損として除外済。")
+    L.append("")
+    if not missing:
+        L.append("✅ 期間内の取得漏れ候補なし。")
+    else:
+        L.append(f"⚠️ **取得漏れ候補 {len(missing)} 件** (再取得対象):")
         L.append("")
-        L.append("期待される表 (将来):")
-        L.append("```")
-        L.append("| offset | n_races | live_ev_mean | final_ev_mean | drift_mean |")
-        L.append("|        | _ratio  |              |               | (live-final)|")
-        L.append("```")
-    else:
-        # TODO: race_odds.csv (final) と race_odds_prerace.csv (live) を join し、
-        #       ST2 1着付け min odds をレース別 + offset 別で比較する集計
-        L.append(f"prerace odds 行数: {len(odds_rows):,} (集計ロジックは蓄積後実装)")
+        L.append("| race_date | place | R | status |")
+        L.append("|---|---|---|---|")
+        for r in missing[:15]:
+            L.append(f"| {r['race_date']} | {r['place_code']} | "
+                     f"{r['race_no']} | {r['status']} |")
+        if len(missing) > 15:
+            L.append(f"| ... | | | (+{len(missing) - 15} 件) |")
     L.append("")
     return L
 
 
-def _md_market_health(odds_rows: list[dict]) -> list[str]:
-    """セクション 4: Market Health (EHI 風)。"""
-    L: list[str] = []
-    L.append("## 4. Market Health (EHI: Edge Health Index)")
-    L.append("")
-    if not odds_rows:
-        L.append("⚠️ 未蓄積。蓄積開始後、Boat の `ehi_monitor.py` を参考に以下を表示:")
-        L.append("- 1 番人気の過剰投票 (Overround) 検出")
-        L.append("- 市場全体の implied prob 合計が 1.0 から離れる度合い")
-        L.append("- 単独人気 1 倍台レース比率")
-    else:
-        L.append("(EHI 計算は蓄積後実装)")
-    L.append("")
-    return L
+def _md_actions(log_rows: list[dict], health: dict) -> list[str]:
+    """セクション 6: アクション推奨 + フッタ。
 
-
-def _md_actions(log_rows: list[dict]) -> list[str]:
-    """セクション 5: アクション推奨 + フッタ。"""
+    gate 判定は「ユニークレース数」基準 (監査 P1-1)。旧実装の offset 合算
+    ok 行数は同一レースを最大 5 重カウントし観測数を過大表示していた。
+    """
     L: list[str] = []
-    L.append("## 5. アクション推奨")
+    L.append("## 6. アクション推奨")
     L.append("")
-    n_ok_total = sum(
-        v.get("ok", 0) for v in summarize_coverage(log_rows).values()
-    ) if log_rows else 0
-    L.append(f"- 現在の累計 ok snapshot 数: **{n_ok_total}**")
-    if n_ok_total < 30:
-        L.append("- 🟡 蓄積期 (n<30): drift 評価不能、観測継続")
-    elif n_ok_total < 50:
-        L.append("- 🟡 監査期 (n=30〜50): drift 定量化開始、戦略はまだ固定しない")
+    n_races = count_unique_ok_races(log_rows) if log_rows else 0
+    n_wedge = health.get("n_wedge_races", 0)
+    L.append(f"- 期間内 ok snapshot ユニークレース数: **{n_races}** "
+             f"(wedge 実測可能: {n_wedge})")
+    if n_races < 30:
+        L.append("- 🟡 蓄積期 (races<30): drift 評価不能、観測継続")
+    elif n_races < 50:
+        L.append("- 🟡 監査期 (races=30〜50): drift 定量化開始、戦略はまだ固定しない")
     else:
-        L.append("- 🟢 戦略仮固定期 (n≥50): 券種/モデル/EV 閾値の暫定 freeze を検討")
+        L.append("- 🟢 観測十分 (races≥50): ただし freeze 判定は本表の実測 wedge / "
+                 "overround / 完了状態を見て行う (行数 gate は廃止)")
     L.append("")
     L.append("---")
     L.append("生成: `python weekly_drift_report.py`")
@@ -433,7 +549,8 @@ def _md_actions(log_rows: list[dict]) -> list[str]:
 
 def render_report(start: date, end: date,
                   log_rows: list[dict],
-                  odds_rows: list[dict]) -> str:
+                  health: dict,
+                  missing: list[dict]) -> str:
     """マークダウンレポート文字列を生成。"""
     L: list[str] = []
     L.append(f"# Weekly Drift Report ({start.isoformat()} ~ {end.isoformat()})")
@@ -446,9 +563,10 @@ def render_report(start: date, end: date,
     L.extend(_md_cron_health())
     L.extend(_md_coverage(log_rows))
     L.extend(_md_timing(log_rows))
-    L.extend(_md_drift(odds_rows))
-    L.extend(_md_market_health(odds_rows))
-    L.extend(_md_actions(log_rows))
+    L.extend(_md_drift(health))
+    L.extend(_md_market_health(health))
+    L.extend(_md_completion(missing))
+    L.extend(_md_actions(log_rows, health))
     return "\n".join(L)
 
 
@@ -627,23 +745,70 @@ def _html_timing(timing: dict[float, dict[str, float]]) -> list[str]:
     return p
 
 
-def _html_actions(n_snap_total: int) -> list[str]:
-    """セクション 3-4 (未実装表示) + 5 (アクション推奨) + フッタ + div 終了。"""
+def _html_drift_health(health: dict, missing: list[dict]) -> list[str]:
+    """セクション 3-5: 実測 wedge / overround / 完了状態 (監査 P1-1/P1-3)。"""
     p: list[str] = []
-    # 3-4. drift / EHI は未実装メッセージのみ
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '3-4. live↔final drift / Market Health (EHI)</h3>')
-    p.append('<p style="color:#999;">(蓄積進行後に実装予定)</p>')
-
-    # 5. アクション
-    p.append('<h3 style="color:#444; margin:18px 0 8px 0;">5. アクション推奨</h3>')
-    if n_snap_total < 30:
-        action = "🟡 蓄積期 (n&lt;30): drift 評価不能、観測継続"
-    elif n_snap_total < 50:
-        action = "🟡 監査期 (n=30〜50): drift 定量化開始、戦略は未固定"
+             '3. 実測ドリフト (settlement wedge, 当選組, W除外)</h3>')
+    if not health["wedge"]:
+        p.append('<p style="color:#999;">⚠️ 期間内に測定可能データなし</p>')
     else:
-        action = "🟢 戦略仮固定期 (n≥50): 暫定 freeze を検討"
-    p.append(f'<p>累計 ok snapshot 数: <b>{n_snap_total:,}</b><br>{action}</p>')
+        p.append(f'<table {HTML_TBL}>')
+        p.append(f'<tr><th {HTML_TH}>券種</th><th {HTML_TH_R}>offset</th>'
+                 f'<th {HTML_TH_R}>n_races</th><th {HTML_TH_R}>median wedge%</th>'
+                 f'<th {HTML_TH_R}>|w|&gt;10%</th><th {HTML_TH_R}>不利%</th></tr>')
+        for r in health["wedge"]:
+            color = "#c00" if r["median_pct"] < -3 else "#333"
+            p.append(
+                f'<tr><td {HTML_TD}>{r["bet"]}</td>'
+                f'<td {HTML_TD_R}>{r["offset"]}</td>'
+                f'<td {HTML_TD_R}>{r["n_races"]}</td>'
+                f'<td {HTML_TD_R} style="color:{color};"><b>{r["median_pct"]}</b></td>'
+                f'<td {HTML_TD_R}>{r["gt10_pct"]}</td>'
+                f'<td {HTML_TD_R}>{r["adverse_pct"]}</td></tr>')
+        p.append('</table>')
+
+    p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
+             '4. Market Health (overround, 基準≈1.34)</h3>')
+    if not health["overround"]:
+        p.append('<p style="color:#999;">⚠️ 期間内データなし</p>')
+    else:
+        cells = " / ".join(
+            f'{r["bet"]}: <b>{r["ov_median"]}</b>'
+            + ("" if 1.25 <= r["ov_median"] <= 1.45 else " ⚠️")
+            for r in health["overround"])
+        p.append(f'<p>{cells}</p>')
+
+    p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
+             '5. per-race 完了状態 (取得漏れ候補)</h3>')
+    if not missing:
+        p.append('<p style="color:#2a7;">✅ 期間内の取得漏れ候補なし</p>')
+    else:
+        items = ", ".join(f'{r["race_date"]}/{r["place_code"]}/{r["race_no"]}'
+                          for r in missing[:10])
+        more = f" (+{len(missing) - 10})" if len(missing) > 10 else ""
+        p.append(f'<p style="color:#c00;">⚠️ <b>{len(missing)} 件</b>: '
+                 f'{items}{more}</p>')
+    return p
+
+
+def _html_actions(n_races: int, health: dict) -> list[str]:
+    """セクション 6 (アクション推奨) + フッタ + div 終了。
+
+    gate はユニークレース数基準 (監査 P1-1: 旧 offset 合算 ok 行数は
+    同一レース最大 5 重カウントのため廃止)。
+    """
+    p: list[str] = []
+    p.append('<h3 style="color:#444; margin:18px 0 8px 0;">6. アクション推奨</h3>')
+    if n_races < 30:
+        action = "🟡 蓄積期 (races&lt;30): drift 評価不能、観測継続"
+    elif n_races < 50:
+        action = "🟡 監査期 (races=30〜50): drift 定量化開始、戦略は未固定"
+    else:
+        action = ("🟢 観測十分 (races≥50): freeze 判定は実測 wedge / overround / "
+                  "完了状態で行う (行数 gate 廃止)")
+    p.append(f'<p>期間内 ok snapshot ユニークレース数: <b>{n_races:,}</b> '
+             f'(wedge 実測可能: {health.get("n_wedge_races", 0):,})<br>{action}</p>')
 
     p.append(
         '<hr style="border:none; border-top:1px solid #ddd; '
@@ -656,7 +821,9 @@ def _html_actions(n_snap_total: int) -> list[str]:
 
 
 def render_report_html(start: date, end: date,
-                       log_rows: list[dict]) -> str:
+                       log_rows: list[dict],
+                       health: dict,
+                       missing: list[dict]) -> str:
     """Gmail で剥がされない inline-style 版 HTML レポート。
 
     text 版と同じ情報を見やすい色付き表で表示。
@@ -666,6 +833,7 @@ def render_report_html(start: date, end: date,
     cov = summarize_coverage(log_rows) if log_rows else {}
     timing = summarize_actual_offset(log_rows) if log_rows else {}
     n_snap_total = sum(d["snapshots_ok"] for d in daily)
+    n_races = count_unique_ok_races(log_rows) if log_rows else 0
 
     p: list[str] = []
     p.extend(_html_header(start, end, daily, n_snap_total))
@@ -673,13 +841,16 @@ def render_report_html(start: date, end: date,
     p.extend(_html_cron_health(cron_status))
     p.extend(_html_coverage(cov))
     p.extend(_html_timing(timing))
-    p.extend(_html_actions(n_snap_total))
+    p.extend(_html_drift_health(health, missing))
+    p.extend(_html_actions(n_races, health))
     return "\n".join(p)
 
 
 def _send_mail_report(report: str, out_path: Path,
                       start: date, end: date,
-                      log_rows: list[dict]) -> None:
+                      log_rows: list[dict],
+                      health: dict,
+                      missing: list[dict]) -> None:
     """--mail 指定時: サマリ入り件名 + HTML 版を付けてレポートをメール送信。"""
     try:
         from gmail_notify import send_email
@@ -687,10 +858,8 @@ def _send_mail_report(report: str, out_path: Path,
         print(f"⚠️ gmail_notify import 失敗: {e}", file=sys.stderr)
         return
     # メール本文は markdown 全文 (Gmail 上は等幅で読めるので十分)
-    # 件名にサマリを入れる (健全日数 + snapshot 数で一目検知)
-    n_ok = sum(
-        v.get("ok", 0) for v in summarize_coverage(log_rows).values()
-    ) if log_rows else 0
+    # 件名にサマリを入れる (健全日数 + ユニークレース数で一目検知)
+    n_ok = count_unique_ok_races(log_rows) if log_rows else 0
     daily_health = get_daily_ingestion_health(start, end)
     n_total = len(daily_health)
     n_ok_days = sum(
@@ -709,12 +878,16 @@ def _send_mail_report(report: str, out_path: Path,
         mark = "⚠️"
     else:
         mark = "✅"
+    # 取得漏れ候補があれば件名でも警告 (監査 P1-3)
+    if missing and mark == "✅":
+        mark = "⚠️"
     subject = (
         f"{mark} [keirin-ai] 週次 {start}~{end} "
-        f"OK {n_ok_days}/{n_total}日 / snapshots {n_ok}"
+        f"OK {n_ok_days}/{n_total}日 / races {n_ok}"
+        + (f" / 取得漏れ{len(missing)}" if missing else "")
     )
     # HTML 版を生成 (Gmail で見栄え良い表に)
-    html_body = render_report_html(start, end, log_rows)
+    html_body = render_report_html(start, end, log_rows, health, missing)
     try:
         send_email(
             subject=subject,
@@ -732,17 +905,19 @@ def main() -> None:
     print(f"Range: {start} ~ {end}")
 
     log_rows = load_snapshot_log(start, end)
-    odds_rows = load_prerace_odds(start, end)
+    health = compute_market_health(start, end)
+    missing = load_completion_missing(start, end)
     print(f"snapshot log rows: {len(log_rows)}")
-    print(f"prerace odds rows: {len(odds_rows)}")
+    print(f"wedge 実測可能レース: {health['n_wedge_races']}, "
+          f"取得漏れ候補: {len(missing)}")
 
-    report = render_report(start, end, log_rows, odds_rows)
+    report = render_report(start, end, log_rows, health, missing)
     out_path = Path(args.out)
     out_path.write_text(report, encoding="utf-8")
     print(f"\nReport: {out_path}")
 
     if args.mail:
-        _send_mail_report(report, out_path, start, end, log_rows)
+        _send_mail_report(report, out_path, start, end, log_rows, health, missing)
 
 
 if __name__ == "__main__":

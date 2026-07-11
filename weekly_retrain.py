@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import shutil
 import subprocess
@@ -402,6 +403,37 @@ def _model_path(target: str) -> Path:
     return MODEL_DIR / f"ml_weekly_model_{target}.lgb"
 
 
+def _model_hash() -> str:
+    """保存済み 4 モデルファイル連結の SHA-256 先頭 12 桁 (成果物同一性)。
+
+    daily_shadow_predict.py の model_hash と同一定義。予測ログとの突合キー。
+    """
+    h = hashlib.sha256()
+    for target in list(CLF_TARGETS) + [REG_TARGET]:
+        h.update(_model_path(target).read_bytes())
+    return h.hexdigest()[:12]
+
+
+def _append_manifest(meta: dict, verdict: str, reason: str, mhash: str) -> None:
+    """weekly_model/MANIFEST.md の自動追記ログへ 1 行追加 (監査 P1-2)。
+
+    採用・特徴量数・hash・判定理由を機械的に残す。ロールバック等の手動操作も
+    MANIFEST に手で記録する運用 (MANIFEST 冒頭の説明参照)。
+    """
+    manifest = MODEL_DIR / "MANIFEST.md"
+    line = (f"- {meta['trained_at']} 採用 (verdict={verdict}): "
+            f"{meta['n_features']} 特徴量, model_hash={mhash}, "
+            f"OOS y_win AUC {meta['oos_metrics']['y_win']['auc']:.4f} — {reason}\n")
+    if manifest.exists():
+        with open(manifest, "a", encoding="utf-8") as f:
+            f.write(line)
+    else:
+        with open(manifest, "w", encoding="utf-8") as f:
+            f.write("# weekly_model MANIFEST\n\n## 自動追記ログ\n"
+                    "<!-- AUTO-APPEND-BELOW -->\n" + line)
+    print(f"  MANIFEST 追記: {manifest}")
+
+
 def adopt_models(models: dict[str, lgb.Booster], meta: dict) -> None:
     """旧メタ/旧モデルを .prev にバックアップして新モデルを採用。"""
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -587,6 +619,13 @@ def main() -> None:
         "adoption_reason": reason,
     }
     adopt_models(models, meta)
+
+    # 成果物 hash を確定し meta / MANIFEST に記録 (監査 P1-2: 有効モデルの追跡)
+    mhash = _model_hash()
+    meta["model_hash"] = mhash
+    with open(META_PATH, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    _append_manifest(meta, verdict, reason, mhash)
 
     # probs/picks 差分再生成 (範囲設計は docstring 参照)
     if PROBS_PATH.exists():

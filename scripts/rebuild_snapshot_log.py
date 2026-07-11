@@ -98,6 +98,21 @@ def main() -> None:
             all_rows = list(reader)
     all_rows.extend(new_rows)
 
+    # 既存内の重複も除去 (2026-07-11 監査 P2: 5/31 に同一 ok 198 件が残り
+    # 観測数を水増ししていた。マージ後の全行を同一キーで dedup する)
+    dedup_key = ("race_date", "place_code", "race_no", "target_offset_min", "status")
+    seen: set[tuple] = set()
+    unique_rows: list[dict] = []
+    for r in all_rows:
+        key = tuple(r.get(k, "") for k in dedup_key)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_rows.append(r)
+    if len(unique_rows) < len(all_rows):
+        print(f"既存内重複を除去: {len(all_rows) - len(unique_rows):,} 行")
+    all_rows = unique_rows
+
     # snapshot_dt 順 (空文字 = 末尾)
     def sort_key(r):
         dt = r.get("snapshot_dt", "")
@@ -107,11 +122,10 @@ def main() -> None:
 
     # st_time が空の rebuild 行は race_entries から補完したいが、
     # ここでは簡略化のため空のままにする (重要なのは status=ok の集計)
-    cols = [
-        "race_date", "place_code", "race_no",
-        "st_time", "snapshot_dt", "minutes_before_start",
-        "target_offset_min", "status", "n_rows", "note",
-    ]
+    # 列は storage.CSV_SCHEMAS を単一の真実とする (旧ハードコードは
+    # スキーマ拡張時に新列を落とす事故になるため廃止)
+    from src.storage import CSV_SCHEMAS
+    cols = CSV_SCHEMAS["prerace_snapshot_log.csv"]
     with open(log_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         writer.writeheader()

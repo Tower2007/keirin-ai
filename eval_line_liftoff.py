@@ -61,6 +61,22 @@ def _load_models(suffix: str) -> dict:
 
 
 def main() -> None:
+    # guard (2026-07-11 監査 P1-2): 本スクリプトは「現行=54特徴量line モデル、
+    # .prev=41特徴量」の配置を前提とする。2026-07-07 08:48 のロールバックで
+    # 現行は 41 特徴量に戻っており、そのまま実行すると同一モデル比較 +
+    # 特徴量不足になる。再実験手順は weekly_model/MANIFEST.md 参照。
+    import json
+    with open(MODEL_DIR / "ml_weekly_meta.json", encoding="utf-8") as f:
+        n_feat = json.load(f).get("n_features")
+    expected = len(FEAT_LINE)
+    if n_feat != expected:
+        sys.exit(
+            f"[abort] 現行 weekly_model は {n_feat} 特徴量 (期待 {expected})。\n"
+            f"  54 特徴量 line モデルは 2026-07-07 にロールバック済み。\n"
+            f"  再実験: line_real_features.csv.disabled を戻し、"
+            f"build_line_real_features.py → weekly_retrain.py を先に実行。\n"
+            f"  経緯: weekly_model/MANIFEST.md")
+
     print("[1] dataset 構築 (実ライン込み)")
     data, data_max = wr.load_data_extended()
     df = mlb.build_dataset(data)

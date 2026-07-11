@@ -332,7 +332,8 @@ def main() -> None:
             time.sleep(wait_sec)
 
         now = datetime.now()
-        mins_before = int(round((st_dt - now).total_seconds() / 60.0))
+        secs_before = (st_dt - now).total_seconds()
+        mins_before = int(round(secs_before / 60.0))
 
         result = capture_race(
             client,
@@ -350,6 +351,10 @@ def main() -> None:
             "status": result["status"],
             "n_rows": result["n_rows"],
             "note": result["note"],
+            # 秒精度 3 列 (監査 P1-5): 0.5 分 offset の厳密判定・発走後取得の除外用
+            "scheduled_snapshot_dt": snapshot_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "seconds_before_start": int(secs_before),
+            "capture_lag_sec": round((now - snapshot_at).total_seconds(), 1),
         }
         log_rows.append(row)
         # 逐次 append: PC sleep/シャットダウン耐性 (5/27, 5/29 で
