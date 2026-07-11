@@ -34,8 +34,11 @@ from src.config import DATA_DIR
 from ingest_day import ingest_one_day, _per_race_state
 
 RECOVERY_LOG = DATA_DIR / "recovery_log.csv"
-LOG_COLS = ["ts", "race_date", "place_code", "race_no",
-            "prev_status", "outcome", "note"]
+# run_id: 実行単位の識別子 (Codex 07-11 再レビュー: 全 288 件と一対一照合できる
+# 台帳にするため)。is_side_effect: サンプル対象外だが同一 venue-day の治癒で
+# 一緒に回復し得たレース (venue-day 単位治癒の副作用も台帳に残す)。
+LOG_COLS = ["run_id", "ts", "race_date", "place_code", "race_no",
+            "prev_status", "outcome", "is_side_effect", "note"]
 
 
 def _stdout_utf8() -> None:
@@ -111,7 +114,19 @@ def main() -> None:
           .size().to_string(), "\n")
 
     client = KeirinClient()
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_dt = datetime.now()
+    ts = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+    run_id = now_dt.strftime("%Y%m%dT%H%M%S")
+
+    # 台帳の完全性: 対象 venue-day の「全 missing レース」を記録対象に拡張。
+    # venue-day 単位の治癒はサンプル対象外レースも一緒に回復させるため、
+    # サンプル run でも副作用回復が台帳に残る (is_side_effect=1 で区別)。
+    comp_all = pd.read_csv(DATA_DIR / "race_completion.csv",
+                           dtype={"race_date": str, "place_code": str,
+                                  "race_no": str})
+    target_keys = set(map(tuple,
+                          targets[["race_date", "place_code", "race_no"]].values))
+
     log_rows: list[dict] = []
     for (rd, pc), g_races in vd:
         print(f"--- {rd} place={pc} ({len(g_races)} races) ---")
@@ -121,16 +136,23 @@ def main() -> None:
         except Exception as e:
             note = f"{type(e).__name__}: {e}"[:200]
             print(f"  [error] {note}")
-        # 再取得後の状態で分類
+        # 再取得後の状態で、この venue-day の全 missing レースを分類
         res_rows, settled, pays = _per_race_state(int(pc), rd)
-        for _, race in g_races.iterrows():
+        day_missing = comp_all[
+            (comp_all["race_date"] == rd) & (comp_all["place_code"] == pc)
+            & comp_all["status"].str.startswith("missing")]
+        for _, race in day_missing.iterrows():
+            key = (rd, pc, race["race_no"])
             outcome = ("parse_error" if note else
                        classify(race["status"], race["race_no"],
                                 res_rows, settled, pays))
             log_rows.append({
-                "ts": ts, "race_date": rd, "place_code": pc,
+                "run_id": run_id, "ts": ts,
+                "race_date": rd, "place_code": pc,
                 "race_no": race["race_no"], "prev_status": race["status"],
-                "outcome": outcome, "note": note,
+                "outcome": outcome,
+                "is_side_effect": 0 if key in target_keys else 1,
+                "note": note,
             })
     append_log(log_rows)
 

@@ -138,9 +138,15 @@ CSV_SCHEMAS: dict[str, list[str]] = {
         "p_win", "p_top2", "p_top3", "pred_rank",
         "predicted_at", "model_trained_at", "model_hash", "n_features",
         # Codex 2026-07-11 レビュー: 後結合監査の版情報固定
-        # prediction_input_hash = 推論入力 (特徴量行列) の SHA-256 先頭 12 桁
+        # prediction_input_hash = 推論入力 (キー + 特徴量行列) の SHA-256 先頭 12 桁
         # code_revision = 予測時の Git commit
         "prediction_input_hash", "code_revision",
+        # Codex 07-11 再レビュー: 論理キー重複の一意解決用
+        # run_id = 予測 run の識別子 (YYYYMMDDTHHMMSS)
+        # run_type = official (朝 cron の事前予測) / rerun (再実行・補完) /
+        #            legacy_unverifiable (事前時点性を監査できない旧行。
+        #            正式な shadow 評価から除外する)
+        "run_id", "run_type",
     ],
 }
 

@@ -203,14 +203,20 @@ def main() -> None:
         t: lgb.Booster(model_file=str(MODEL_DIR / f"ml_weekly_model_{t}.lgb"))
         for t in TARGETS
     }
-    predicted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_dt = datetime.now()
+    predicted_at = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+    run_id = now_dt.strftime("%Y%m%dT%H%M%S")
+    # run_type: 朝 cron の事前予測 = official。--force / --date 指定の再実行は
+    # rerun (発走後の再実行は事前時点性を主張できないため official と区別)。
+    run_type = "rerun" if (args.force or args.date) else "official"
     X = df[feat_cols]
-    # 推論入力の hash (Codex 07-11): 後結合監査で「この予測は正確にこの入力から
-    # 出た」を固定する。キー順ソート済み CSV バイト列の SHA-256 先頭 12 桁。
-    sorted_df = df.sort_values(
-        ["race_date", "place_code", "race_no", "car_no"])
+    # 推論入力の hash (Codex 07-11、再レビューで (race,car) キーも hash 入力に
+    # 含めるよう修正): 後結合監査で「この予測は正確にこの入力から出た」を固定。
+    # キー順ソート済み (キー列 + 特徴量列) CSV バイト列の SHA-256 先頭 12 桁。
+    key_cols = ["race_date", "place_code", "race_no", "car_no"]
+    sorted_df = df.sort_values(key_cols)
     input_hash = hashlib.sha256(
-        sorted_df[feat_cols].to_csv(index=False).encode("utf-8")
+        sorted_df[key_cols + feat_cols].to_csv(index=False).encode("utf-8")
     ).hexdigest()[:12]
     revision = code_revision()
     preds = {t: m.predict(X, num_iteration=m.best_iteration)
@@ -232,6 +238,8 @@ def main() -> None:
             "n_features": len(feat_cols),
             "prediction_input_hash": input_hash,
             "code_revision": revision,
+            "run_id": run_id,
+            "run_type": run_type,
         })
     n = append_rows(OUT_NAME, rows)
     n_races = df.groupby(["race_date", "place_code", "race_no"]).ngroups

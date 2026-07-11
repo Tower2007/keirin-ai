@@ -162,16 +162,20 @@ GATE_A_BETS = ["SH2", "ST2", "RH3", "RT3"]  # WH2/WT2 は未発売が多く n �
 def evaluate_gate_a(end: date) -> dict:
     """freeze gate A (snapshot timing lock) の自動判定 (Codex 2026-07-11 提案)。
 
-    直近 4 週 (end を末日とする 7 日ブロック×4) について offset 別に判定:
+    判定は **offset × bet_type 単位** (Codex 07-11 再レビュー対応)。
+    旧実装は offset を全券種 AND で判定したため、RT3 を gate B で戦略候補から
+    外しても timing 自体が永続 FAIL する論理衝突があった。共有条件と券種別
+    条件を分離し、gate B は必要な券種の PASS だけを参照する。
+
+    共有条件 (offset 単位、4 週すべて):
       - settled races >= 150 / 週 (wedge を実測できたユニークレース数)
       - planned race に対する ok coverage >= 98%
       - 発走後取得 (seconds_before_start < 0) = 0
-      - capture_lag_sec の p95 <= 10 秒
-      - 券種×offset ごとに |median wedge| <= 1.0%
-      - P90(|wedge|) <= 5%、P(|wedge|>10%) <= 5%
-      - 直近 14 日の未解決 missing = 0 (offset 共通)
-    4 週すべて + missing=0 で PASS。通過は「timing 固定可」の意味であり
-    収益の保証ではない (CLAUDE.md 凍結基準の節を参照)。
+      - abs(capture_lag_sec) の p95 <= 10 秒 (早すぎる取得も検知)
+      - 直近 14 日の未解決 missing = 0
+    券種別条件 (offset × bet、4 週すべて):
+      - |median wedge| <= 1.0%、P90(|wedge|) <= 5%、P(|wedge|>10%) <= 5%
+    PASS = 「その offset × 券種の timing 固定可」であり収益の保証ではない。
     """
     import pandas as pd
     # 進行中の当日を含めると planned に夕方レースが入り coverage が
@@ -228,7 +232,8 @@ def evaluate_gate_a(end: date) -> dict:
     offsets = sorted(log["off"].dropna().unique(), reverse=True)
     for off in offsets:
         wk_rows = []
-        all_pass = True
+        shared_all_pass = True
+        bet_all_pass = {bt: True for bt in GATE_A_BETS}
         for ws, we in weeks:
             wsi, wei = ws.isoformat(), we.isoformat()
             lw = log[(log["off"] == off) & (log["race_date"] >= wsi)
@@ -240,55 +245,68 @@ def evaluate_gate_a(end: date) -> dict:
                 .drop_duplicates().shape[0]
             coverage = ok_races / planned_races if planned_races else 0.0
             post_start = int((ok["sbs"] < 0).sum())
-            lag_p95 = float(ok["lag"].quantile(0.95)) if ok["lag"].notna().any() else float("nan")
+            # abs(): 予定より早すぎる取得も遅延と同様に検知 (Codex 再レビュー)
+            lag_p95 = (float(ok["lag"].abs().quantile(0.95))
+                       if ok["lag"].notna().any() else float("nan"))
             mw = m[(m["off"] == off) & (m["race_date"] >= wsi)
                    & (m["race_date"] <= wei)]
             settled = mw[keys].drop_duplicates().shape[0]
-            fails: list[str] = []
+
+            # --- 共有条件 (offset 単位) ---
+            shared_fails: list[str] = []
             if settled < 150:
-                fails.append(f"settled {settled}<150")
+                shared_fails.append(f"settled {settled}<150")
             if coverage < 0.98:
-                fails.append(f"coverage {coverage:.1%}<98%")
+                shared_fails.append(f"coverage {coverage:.1%}<98%")
             if post_start > 0:
-                fails.append(f"発走後取得 {post_start}")
+                shared_fails.append(f"発走後取得 {post_start}")
             if not (lag_p95 == lag_p95):  # NaN
-                fails.append("lag 未計測")
+                shared_fails.append("lag 未計測")
             elif lag_p95 > 10:
-                fails.append(f"lag_p95 {lag_p95:.0f}s>10s")
-            worst_med = worst_p90 = worst_p10 = 0.0
+                shared_fails.append(f"lag_p95 {lag_p95:.0f}s>10s")
+            if shared_fails:
+                shared_all_pass = False
+
+            # --- 券種別条件 (offset × bet 単位) ---
+            bet_fails: dict[str, list[str]] = {}
             for bt in GATE_A_BETS:
+                bf: list[str] = []
                 w = mw[mw["bet_type"] == bt]["wedge"].dropna()
                 if len(w) == 0:
-                    fails.append(f"{bt} n=0")
-                    continue
-                med = abs(float(w.median())) * 100
-                p90 = float(w.abs().quantile(0.90)) * 100
-                p10 = float((w.abs() > 0.10).mean()) * 100
-                worst_med = max(worst_med, med)
-                worst_p90 = max(worst_p90, p90)
-                worst_p10 = max(worst_p10, p10)
-                if med > 1.0:
-                    fails.append(f"{bt}|med|{med:.1f}%>1%")
-                if p90 > 5.0:
-                    fails.append(f"{bt}P90 {p90:.1f}%>5%")
-                if p10 > 5.0:
-                    fails.append(f"{bt}P>10% {p10:.1f}%>5%")
-            wk_pass = not fails
-            all_pass = all_pass and wk_pass
+                    bf.append("n=0")
+                else:
+                    med = abs(float(w.median())) * 100
+                    p90 = float(w.abs().quantile(0.90)) * 100
+                    p10 = float((w.abs() > 0.10).mean()) * 100
+                    if med > 1.0:
+                        bf.append(f"|med|{med:.1f}%>1%")
+                    if p90 > 5.0:
+                        bf.append(f"P90 {p90:.1f}%>5%")
+                    if p10 > 5.0:
+                        bf.append(f">10% {p10:.1f}%>5%")
+                if bf:
+                    bet_fails[bt] = bf
+                    bet_all_pass[bt] = False
+
             wk_rows.append({
                 "week": f"{wsi[5:]}~{wei[5:]}", "settled": settled,
                 "coverage_pct": round(coverage * 100, 1),
                 "post_start": post_start,
                 "lag_p95": round(lag_p95, 1) if lag_p95 == lag_p95 else None,
-                "worst_med_pct": round(worst_med, 2),
-                "worst_p90_pct": round(worst_p90, 1),
-                "worst_gt10_pct": round(worst_p10, 1),
-                "pass": wk_pass,
-                "fails": fails[:4],
+                "shared_pass": not shared_fails,
+                "shared_fails": shared_fails[:3],
+                "bet_fails": bet_fails,
             })
-        verdict = all_pass and out["missing_14d"] == 0
+        missing_ok = out["missing_14d"] == 0
+        bet_verdicts = {
+            bt: shared_all_pass and missing_ok and bet_all_pass[bt]
+            for bt in GATE_A_BETS
+        }
         out["offsets"][_parse_offset(off)] = {
-            "weeks": wk_rows, "verdict": verdict}
+            "weeks": wk_rows,
+            "shared_pass": shared_all_pass and missing_ok,
+            "bet_verdicts": bet_verdicts,
+        }
     return out
 
 
@@ -658,28 +676,41 @@ def _md_completion(missing: list[dict]) -> list[str]:
 
 
 def _md_gate_a(gate: dict) -> list[str]:
-    """セクション 7: freeze gate A (snapshot timing lock) 自動判定。"""
+    """セクション 7: freeze gate A (snapshot timing lock) 自動判定。
+
+    判定は offset × 券種単位 (Codex 07-11 再レビュー: 全券種 AND だと
+    RT3 を gate B で外しても timing が永続 FAIL する衝突があった)。
+    """
     L: list[str] = []
-    L.append("## 7. freeze gate A 判定 (snapshot timing lock)")
+    L.append("## 7. freeze gate A 判定 (snapshot timing lock, offset×券種)")
     L.append("")
-    L.append("基準: CLAUDE.md「凍結基準」参照 (4週連続 settled≥150, coverage≥98%, "
-             "発走後0, lag p95≤10s, |median wedge|≤1%, P90≤5%, P>10%≤5%, "
-             "直近14日 missing=0)。**通過 = timing 固定可であり収益の保証ではない。**")
+    L.append("基準: CLAUDE.md「凍結基準」参照。gate B は戦略候補券種の PASS のみ参照する。")
+    L.append("**通過 = その offset×券種の timing 固定可であり収益の保証ではない。**")
     L.append("")
     L.append(f"- 直近 14 日の未解決 missing: **{gate['missing_14d']}**")
     L.append("")
+    # offset × 券種 の判定マトリクス
+    L.append("| offset (分前) | 共有条件 | " + " | ".join(GATE_A_BETS) + " |")
+    L.append("|---:|---|" + "---|" * len(GATE_A_BETS))
     for off, data in gate["offsets"].items():
-        mark = "🟢 PASS" if data["verdict"] else "🔴 FAIL"
-        L.append(f"### offset {off} 分前: {mark}")
+        sh = "✅" if data["shared_pass"] else "❌"
+        cells = " | ".join(
+            "🟢 PASS" if data["bet_verdicts"].get(bt) else "🔴 FAIL"
+            for bt in GATE_A_BETS)
+        L.append(f"| {off} | {sh} | {cells} |")
+    L.append("")
+    # 週別詳細 (共有条件 + 券種別 fail 理由)
+    for off, data in gate["offsets"].items():
+        L.append(f"### offset {off} 分前 (週別詳細)")
         L.append("")
-        L.append("| 週 | settled | cov% | 発走後 | lag p95 | worst\\|med\\|% "
-                 "| worst P90% | worst>10% | 判定 |")
-        L.append("|---|---:|---:|---:|---:|---:|---:|---:|---|")
+        L.append("| 週 | settled | cov% | 発走後 | \\|lag\\| p95 | 共有 | 券種別 fail |")
+        L.append("|---|---:|---:|---:|---:|---|---|")
         for w in data["weeks"]:
-            mk = "✅" if w["pass"] else "❌ " + "; ".join(w["fails"])
+            sh = "✅" if w["shared_pass"] else "❌ " + "; ".join(w["shared_fails"])
+            bf = "; ".join(f"{bt}: {', '.join(fs)}"
+                           for bt, fs in w["bet_fails"].items()) or "—"
             L.append(f"| {w['week']} | {w['settled']} | {w['coverage_pct']} | "
-                     f"{w['post_start']} | {w['lag_p95']} | {w['worst_med_pct']} | "
-                     f"{w['worst_p90_pct']} | {w['worst_gt10_pct']} | {mk} |")
+                     f"{w['post_start']} | {w['lag_p95']} | {sh} | {bf} |")
         L.append("")
     return L
 
@@ -958,25 +989,31 @@ def _html_drift_health(health: dict, missing: list[dict]) -> list[str]:
 
 
 def _html_gate_a(gate: dict) -> list[str]:
-    """セクション 7: freeze gate A 判定 (offset 別サマリ)。"""
+    """セクション 7: freeze gate A 判定 (offset×券種マトリクス)。"""
     p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '7. freeze gate A (snapshot timing lock)</h3>')
-    parts = []
+             '7. freeze gate A (snapshot timing lock, offset×券種)</h3>')
+    p.append(f'<table {HTML_TBL}>')
+    p.append(f'<tr><th {HTML_TH_R}>offset (分前)</th><th {HTML_TH}>共有条件</th>'
+             + "".join(f'<th {HTML_TH}>{bt}</th>' for bt in GATE_A_BETS)
+             + '</tr>')
     for off, data in gate["offsets"].items():
-        if data["verdict"]:
-            parts.append(f'{off}分前: <b style="color:#2a7;">PASS</b>')
-        else:
-            # 最新週の fail 理由を 1 つだけ添える
-            last = data["weeks"][-1] if data["weeks"] else {}
-            reason = (last.get("fails") or ["-"])[0]
-            parts.append(f'{off}分前: <b style="color:#c00;">FAIL</b> '
-                         f'<span style="color:#999;">({reason})</span>')
-    p.append(f'<p>{" / ".join(parts)}<br>'
-             f'<span style="color:#999; font-size:12px;">'
-             f'直近14日 missing={gate["missing_14d"]}。'
-             f'基準は CLAUDE.md 凍結基準。通過=timing固定可、収益保証ではない。'
-             f'</span></p>')
+        sh = ('<span style="color:#2a7;">✅</span>' if data["shared_pass"]
+              else '<span style="color:#c00;">❌</span>')
+        cells = "".join(
+            f'<td {HTML_TD}>'
+            + ('<b style="color:#2a7;">PASS</b>'
+               if data["bet_verdicts"].get(bt)
+               else '<b style="color:#c00;">FAIL</b>')
+            + '</td>'
+            for bt in GATE_A_BETS)
+        p.append(f'<tr><td {HTML_TD_R}><b>{off}</b></td>'
+                 f'<td {HTML_TD}>{sh}</td>{cells}</tr>')
+    p.append('</table>')
+    p.append(f'<p style="color:#999; font-size:12px;">'
+             f'直近14日 missing={gate["missing_14d"]}。基準は CLAUDE.md 凍結基準。'
+             f'gate B は戦略候補券種の PASS のみ参照。通過=timing固定可、'
+             f'収益保証ではない。</p>')
     return p
 
 
@@ -1102,9 +1139,11 @@ def main() -> None:
     print(f"snapshot log rows: {len(log_rows)}")
     print(f"wedge 実測可能レース: {health['n_wedge_races']}, "
           f"取得漏れ候補: {len(missing)}")
-    print("gate A: " + ", ".join(
-        f"{off}分前={'PASS' if d['verdict'] else 'FAIL'}"
-        for off, d in gate["offsets"].items()))
+    for off, d in gate["offsets"].items():
+        marks = " ".join(
+            f"{bt}={'PASS' if d['bet_verdicts'].get(bt) else 'FAIL'}"
+            for bt in GATE_A_BETS)
+        print(f"gate A {off}分前: 共有={'OK' if d['shared_pass'] else 'NG'} {marks}")
 
     report = render_report(start, end, log_rows, health, missing, gate)
     out_path = Path(args.out)
