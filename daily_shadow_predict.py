@@ -245,6 +245,40 @@ def main() -> None:
     n_races = df.groupby(["race_date", "place_code", "race_no"]).ngroups
     logger.info("保存: %d 行 (%d races) → %s", n, n_races, OUT_NAME)
 
+    # post-run 自己検証 (Codex 07-11 確認事項の常設化):
+    #  (1) run_type=official であること (cron 経路の確認)
+    #  (2) 当日の期待 (race, car) が official/rerun 行で全て揃うこと
+    #  (3) prediction_input_hash / code_revision が非空であること
+    # 3 点が通れば「shadow 観測の正式な起点」として扱える。
+    saved = pd.read_csv(
+        DATA_DIR / OUT_NAME,
+        usecols=["race_date", "place_code", "race_no", "car_no", "run_id",
+                 "run_type", "prediction_input_hash", "code_revision"],
+        dtype=str)
+    this_run = saved[saved["run_id"] == run_id]
+    checks = []
+    checks.append(("run_type=official",
+                   (this_run["run_type"] == "official").all()
+                   if run_type == "official" else None))
+    verifiable = saved[(saved["race_date"] == target_date)
+                       & saved["run_type"].isin(["official", "rerun"])]
+    got = set(map(tuple, verifiable[
+        ["race_date", "place_code", "race_no", "car_no"]].values))
+    expect_all = set(map(tuple, df[
+        ["race_date", "place_code", "race_no", "car_no"]].astype(str).values))
+    checks.append(("期待(race,car)完全", expect_all <= got))
+    checks.append(("input_hash/revision非空",
+                   bool(this_run["prediction_input_hash"].str.len().gt(0).all()
+                        and this_run["code_revision"].str.len().gt(0).all())))
+    all_ok = all(v for _, v in checks if v is not None)
+    for name, v in checks:
+        mark = "SKIP(rerun)" if v is None else ("OK" if v else "NG")
+        logger.info("  verify %s: %s", name, mark)
+    if all_ok:
+        logger.info("post-run verify: ALL OK (shadow 正式観測として有効)")
+    else:
+        logger.error("post-run verify: NG あり — この run は正式評価に使う前に確認要")
+
 
 if __name__ == "__main__":
     try:
