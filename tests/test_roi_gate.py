@@ -3,6 +3,8 @@
 hokkaido-keiba-ai tests/test_roi_gate.py (参照実装 3d04c7c) の移植。
 合成データで NG / WARN / OK / SKIP / ERROR の 5 経路と、seed 再現性・
 欠損レース除外・retrain_history.csv のヘッダ移行 (後方互換) を検証する。
+2026-07-19 追加: 二車複読み替え (weekly_retrain._quinella_roi_frame /
+_parse_quinella_kumi) の正規化・的中判定・払戻欠損レース除外も検証する。
 ネットワーク・実データ不要。
 
 Usage:
@@ -149,6 +151,133 @@ class RoiGateMechanicsTests(unittest.TestCase):
             win_col="hit", odds_col="pay_mult")
         self.assertEqual(res["verdict"], "OK")
         self.assertEqual(res["n_bets"], 250)
+
+
+class QuinellaRewriteTests(unittest.TestCase):
+    """二車複読み替え (weekly_retrain の前処理) の検証.
+
+    競輪は単勝非発売のため、標準買い目は「y_win 上位 2 車の二車複 1 点 100 円」
+    に読み替える (2026-07-19)。組合せキーの正規化・的中判定・払戻欠損レース
+    除外を合成データで検証する (実データ・モデル不要)。
+    """
+
+    KEYS = ["race_date", "place_code", "race_no"]
+
+    @staticmethod
+    def _runner_rows(race_no: int, champ_scores: dict, cand_scores: dict) -> list:
+        """1 レース分の出走行 (car_no -> score の dict 2 つ) を作る。"""
+        rows = []
+        for car in sorted(set(champ_scores) | set(cand_scores)):
+            rows.append({"race_date": "2026-06-01", "place_code": 42,
+                         "race_no": race_no, "car_no": car,
+                         "p_champion": champ_scores.get(car, np.nan),
+                         "p_candidate": cand_scores.get(car, np.nan)})
+        return rows
+
+    @staticmethod
+    def _pay_rows(race_no: int, kumi_ban: str, payout: int) -> dict:
+        return {"race_date": "2026-06-01", "place_code": 42,
+                "race_no": race_no, "kumi_ban": kumi_ban, "payout": payout}
+
+    def test_parse_kumi_normalization(self):
+        """組合せ表記の正規化: 常に (小, 大)。表記ゆれ許容・不正は None."""
+        import weekly_retrain as wr
+        self.assertEqual(wr._parse_quinella_kumi("1=2"), (1, 2))
+        self.assertEqual(wr._parse_quinella_kumi("7=2"), (2, 7))   # 逆順も正規化
+        self.assertEqual(wr._parse_quinella_kumi("3-5"), (3, 5))   # 区切りゆれ
+        self.assertIsNone(wr._parse_quinella_kumi("4=4"))          # 同番は不正
+        self.assertIsNone(wr._parse_quinella_kumi("1=2=3"))        # 3 連系は不正
+        self.assertIsNone(wr._parse_quinella_kumi(""))
+        self.assertIsNone(wr._parse_quinella_kumi(None))
+
+    def test_hit_and_miss_settlement(self):
+        """champion 的中 (payout/100)・candidate 外れ (0 円) の精算."""
+        import weekly_retrain as wr
+        # champion 上位 2 = {1,2} / candidate 上位 2 = {3,4}。的中組合せは 1=2
+        d = pd.DataFrame(self._runner_rows(
+            1,
+            champ_scores={1: 0.9, 2: 0.8, 3: 0.1, 4: 0.05},
+            cand_scores={1: 0.1, 2: 0.05, 3: 0.9, 4: 0.8}))
+        pay = pd.DataFrame([self._pay_rows(1, "1=2", 340)])
+        out = wr._quinella_roi_frame(d, pay)
+        self.assertEqual(len(out), 2)  # champion 買い目行 + candidate 買い目行
+        champ_row = out[out["p_champion"] == 1.0].iloc[0]
+        cand_row = out[out["p_candidate"] == 1.0].iloc[0]
+        self.assertEqual(champ_row["is_win"], 1)
+        self.assertAlmostEqual(champ_row["odds"], 3.4)
+        self.assertEqual(cand_row["is_win"], 0)
+        self.assertEqual(cand_row["odds"], 0.0)
+
+    def test_dead_heat_multiple_payout_rows(self):
+        """同着等で二車複が複数行あるレースは該当組合せの行で照合する."""
+        import weekly_retrain as wr
+        d = pd.DataFrame(self._runner_rows(
+            1,
+            champ_scores={1: 0.9, 2: 0.8, 3: 0.1, 4: 0.05},
+            cand_scores={1: 0.1, 2: 0.05, 3: 0.9, 4: 0.8}))
+        pay = pd.DataFrame([self._pay_rows(1, "1=2", 100),
+                            self._pay_rows(1, "3=4", 150)])
+        out = wr._quinella_roi_frame(d, pay)
+        champ_row = out[out["p_champion"] == 1.0].iloc[0]
+        cand_row = out[out["p_candidate"] == 1.0].iloc[0]
+        self.assertEqual(champ_row["is_win"], 1)
+        self.assertAlmostEqual(champ_row["odds"], 1.0)
+        self.assertEqual(cand_row["is_win"], 1)
+        self.assertAlmostEqual(cand_row["odds"], 1.5)
+
+    def test_payout_missing_race_excluded(self):
+        """二車複払戻が 1 行もないレースは NaN のまま → roi_gate でペア除外."""
+        import weekly_retrain as wr
+        rows = (self._runner_rows(1, {1: 0.9, 2: 0.8, 3: 0.1},
+                                  {1: 0.9, 2: 0.8, 3: 0.1})
+                + self._runner_rows(2, {1: 0.9, 2: 0.8, 3: 0.1},
+                                    {1: 0.9, 2: 0.8, 3: 0.1}))
+        d = pd.DataFrame(rows)
+        pay = pd.DataFrame([self._pay_rows(1, "1=2", 200)])  # race 2 は払戻欠損
+        out = wr._quinella_roi_frame(d, pay)
+        self.assertEqual(len(out), 4)  # 2 レース x 2 行 (除外は roi_gate 側)
+        r2 = out[out["race_no"] == 2]
+        self.assertTrue(r2["is_win"].isna().all())
+        self.assertTrue(r2["odds"].isna().all())
+        res = evaluate_roi_gate(out, race_keys=self.KEYS)
+        self.assertEqual(res["n_bets"], 1)  # race 2 はペアごと除外
+
+    def test_race_with_fewer_than_two_runners_dropped(self):
+        """スコア非欠損 2 車未満のレースは買い目を組めず両モデルとも除外."""
+        import weekly_retrain as wr
+        rows = (self._runner_rows(1, {1: 0.9, 2: 0.8}, {1: 0.9, 2: 0.8})
+                + self._runner_rows(2, {5: 0.9}, {5: 0.9}))  # 1 車のみ
+        d = pd.DataFrame(rows)
+        pay = pd.DataFrame([self._pay_rows(1, "1=2", 200),
+                            self._pay_rows(2, "5=6", 300)])
+        out = wr._quinella_roi_frame(d, pay)
+        self.assertEqual(sorted(out["race_no"].unique()), [1])
+
+    def test_one_sided_pick_race_dropped_pairwise(self):
+        """片方のモデルだけ買い目を組めたレースは両側とも除外 (同一レース集合)."""
+        import weekly_retrain as wr
+        rows = self._runner_rows(1, {1: 0.9, 2: 0.8, 3: 0.1},
+                                 {1: np.nan, 2: np.nan, 3: np.nan})
+        d = pd.DataFrame(rows)
+        pay = pd.DataFrame([self._pay_rows(1, "1=2", 200)])
+        out = wr._quinella_roi_frame(d, pay)
+        self.assertEqual(len(out), 0)
+
+    def test_end_to_end_identical_models_ok(self):
+        """champion = candidate (同一スコア) -> dROI=0 / OK のフルパス."""
+        import weekly_retrain as wr
+        rows, pays = [], []
+        for r in range(210):
+            scores = {1: 0.9, 2: 0.8, 3: 0.1, 4: 0.05}
+            rows += self._runner_rows(r, scores, scores)
+            # 半分は的中 (2.4 倍)、半分は外れ
+            pays.append(self._pay_rows(r, "1=2" if r % 2 == 0 else "3=4", 240))
+        out = wr._quinella_roi_frame(pd.DataFrame(rows), pd.DataFrame(pays))
+        res = evaluate_roi_gate(out, race_keys=self.KEYS)
+        self.assertEqual(res["verdict"], "OK")
+        self.assertEqual(res["n_bets"], 210)
+        self.assertAlmostEqual(res["roi_delta_pt"], 0.0)
+        self.assertAlmostEqual(res["roi_champion"], 120.0)  # 2.4 倍 x 的中率 1/2
 
 
 class HistoryMigrationTests(unittest.TestCase):

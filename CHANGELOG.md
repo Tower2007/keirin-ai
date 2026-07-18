@@ -1,5 +1,35 @@
 # CHANGELOG
 
+## 2026-07-19 (採用ゲート v2: ROI 拒否権を「二車複」読み替えで実効化)
+
+- **ROI ゲートの標準買い目を単勝 → 二車複へ読み替え** (f719f97 の移植時は
+  競輪単勝非発売のため常時 SKIP の計器のみだった)。`roi_gate.py`
+  (evaluate_roi_gate、艦隊共通仕様) は無変更。呼び出し側 `weekly_retrain.py`
+  の前処理のみで実効化:
+  - 買い目 = 各レース y_win 予測スコア上位 2 車 (同点は車番昇順で決定的) の
+    二車複 1 点 100 円。的中判定は payouts.csv の二車複行 (bet_name='二車複'、
+    kumi_ban '1=2' 形式) を 小-大 正規化キーで照合し、payout/100 を実質オッズ
+    とする。同着等で複数行あるレースは該当組合せの行で照合。
+  - 新設 `_parse_quinella_kumi()` (組合せ表記の正規化) と
+    `_quinella_roi_frame()` (roi_gate docstring の「1 行 = 1 買い目候補」形へ
+    整形: レースごとに champion 買い目行 + candidate 買い目行、指示変数
+    p_champion/p_candidate=1.0/0.0 でレース内 argmax が自モデルの買い目を選ぶ)。
+  - 除外規則: 二車複払戻が 1 行もないレースは NaN 化して roi_gate のレース単位
+    ペア除外に委ねる。スコア非欠損 2 車未満・片側しか買い目を組めないレースも
+    両側除外 (同一レース集合でのペア比較を維持)。
+  - 閾値・seed は共通仕様のまま不変 (NG=-10pt+CI 有意 / WARN=-5pt /
+    min_bets=200 / seed=20260719)。ERROR 素通し・履歴 CSV 記録などの
+    フェイルセーフ構造も不変。
+  - `tests/test_roi_gate.py` に QuinellaRewriteTests 7 件を追加
+    (正規化・的中/外れ精算・同着複数行・払戻欠損除外・2 車未満除外・
+    片側除外・champion=candidate フルパス)。既存 23 と合わせ 30 全合格。
+  - dry-run (read-only、champion=candidate): OOS 8 週 (2026-05-24..07-18) で
+    n_bets=4,212 (= OOS 全 4,212 レース、二車複払戻の被覆 100%)、
+    絶対 ROI 73.9% (二車複の控除率 ~25% と整合、サニティ帯 55〜85% 内)、
+    dROI=+0.00pt / CI[+0.00,+0.00] / verdict=OK を確認。
+  - 本番モデル (*.lgb)・メタ・履歴 CSV は不変。race_odds.csv 不使用。
+    pythonw 安全 (reconfigure 追加なし)。
+
 ## 2026-07-19 (採用ゲート v2: ROI 劣化拒否権を移植)
 
 - **weekly_retrain.py に「採用ゲート v2: ROI 劣化拒否権」を追加**

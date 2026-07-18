@@ -27,17 +27,19 @@
 
 採用ゲート v2: ROI 劣化拒否権 (2026-07 追加。仕様は roi_gate.py 参照):
   精度ゲートが採用判定を出した後・モデル昇格前の最終チェックとして、champion
-  (現役 ml_weekly_model_y_win.lgb) / candidate の「y_win レース内 argmax の
-  単勝 1 点 100 円」ROI を同一 OOS 窓・同一レース集合でペア比較する。
+  (現役 ml_weekly_model_y_win.lgb) / candidate の「y_win 予測上位 2 車の
+  二車複 1 点 100 円」ROI を同一 OOS 窓・同一レース集合でペア比較する。
   dROI <= -10pt かつブートストラップ 95%CI 上限 < 0 のときのみ NG (採用拒否。
   4 本一括採否の構造は変えず、veto 発動時は 4 モデルとも昇格見送り)。
-  SKIP (n_bets<200 or 単勝払戻なし or 初回) / ERROR (計算失敗) / WARN
+  SKIP (n_bets<200 or 二車複払戻なし or 初回) / ERROR (計算失敗) / WARN
   (dROI <= -5pt) は記録のみで精度ゲートの判定に従う (フェイルセーフ:
   ROI ゲート不具合で再学習を止めない)。--force は ROI 拒否権も無視する。
   結果は retrain_history.csv の roi_* 列と meta の roi_gate に毎回記録。
-  注: 競輪の払戻データ (JSJ012 → payouts.csv) に単勝は存在せず、
+  注: 競輪は単勝非発売 (払戻データ JSJ012 → payouts.csv に単勝行がない) のため、
+  艦隊共通仕様の「標準買い目 = argmax 単勝 1 点」は発売券種の二車複へ読み替えて
+  実効化した (2026-07-19)。的中判定・払戻は payouts.csv の二車複行
+  (kumi_ban を 小=大 に正規化して照合、payout/100 = 実質オッズ) を用いる。
   race_odds.csv は 2026-05-12 に意図的更新停止のため OOS オッズ源に使わない。
-  単勝払戻が取れるようになるまでは常に SKIP (計器のみ設置) となる。
 
 学習コスト方針: ml_baseline.py のフル実行実測が約 245 秒 (logs/ml_baseline_phaseB.log)
 のため、学習期間の短縮や n_estimators 削減は行わず baseline と同条件
@@ -66,6 +68,7 @@ import argparse
 import csv
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -393,20 +396,107 @@ def _should_adopt(new_oos: dict, old_meta: dict | None,
     )
 
 
+def _parse_quinella_kumi(kumi) -> tuple[int, int] | None:
+    """payouts.csv の二車複組合せ表記 ('1=2' 等) を (小, 大) タプルへ正規化する。
+
+    実データの区切りは '=' だが、表記ゆれに備え数字 2 個の抽出で読む
+    ('1-2' 等も受ける)。パース不能・同番 (a=a) は None (呼び出し側で除外)。
+    """
+    nums = re.findall(r"\d+", str(kumi))
+    if len(nums) != 2:
+        return None
+    a, b = int(nums[0]), int(nums[1])
+    if a == b:
+        return None
+    return (a, b) if a < b else (b, a)
+
+
+def _quinella_roi_frame(d: pd.DataFrame, pay_q: pd.DataFrame) -> pd.DataFrame:
+    """「y_win 予測上位 2 車の二車複 1 点 100 円」を roi_gate 用 df に整形する。
+
+    d:     KEYS + car_no + p_champion + p_candidate (行 = 出走単位、予測スコア)
+    pay_q: payouts.csv の二車複行 (KEYS + kumi_ban + payout)
+
+    champion / candidate それぞれのレース内スコア上位 2 車 (同点は車番昇順で
+    決定的) を二車複 1 点に組み、roi_gate.py docstring の「1 行 = 1 買い目候補」
+    形 (レースごとに champion の買い目行 + candidate の買い目行) にして返す。
+    evaluate_roi_gate のレース内 argmax が各モデル自身の買い目行を選ぶよう、
+    p_champion / p_candidate は 1.0 / 0.0 の指示変数にする (買い目が同一の
+    レースでも 2 行のまま。両行の is_win / odds が一致するため結果は不変)。
+
+    精算規則:
+      - 買い目が該当レースの二車複払戻の組合せ (小-大 正規化キー) に一致
+        → is_win=1, odds=payout/100 (同着等で複数行あれば該当組合せの行で照合)
+      - 不一致 (外れ) → is_win=0, odds=0
+      - レースに二車複払戻が 1 行もない (払戻欠損) → is_win/odds を NaN のまま
+        渡し、evaluate_roi_gate のレース単位ペア除外に委ねる
+      - スコア非欠損の出走が 2 車未満で買い目を組めないレースは除外
+        (同一レース集合でのペア比較を守るため、片側だけ組めた場合も両側除外)
+    """
+    d = d.copy()
+    d["car_no"] = pd.to_numeric(d["car_no"], errors="coerce")
+
+    # 二車複払戻テーブル (組合せキーを 小-大 に正規化)
+    pq = pay_q.copy()
+    parsed = pq["kumi_ban"].map(_parse_quinella_kumi)
+    pq["lo"] = parsed.map(lambda t: t[0] if t else None)
+    pq["hi"] = parsed.map(lambda t: t[1] if t else None)
+    pq["odds"] = pd.to_numeric(pq["payout"], errors="coerce") / 100.0
+    pq = pq.dropna(subset=["lo", "hi", "odds"])
+    pq["lo"] = pq["lo"].astype(int)
+    pq["hi"] = pq["hi"].astype(int)
+    pq = pq.drop_duplicates(subset=KEYS + ["lo", "hi"])[KEYS + ["lo", "hi", "odds"]]
+    pay_races = pq[KEYS].drop_duplicates().assign(_has_payout=1)
+
+    def _picks(score_col: str) -> pd.DataFrame:
+        """レースごとのスコア上位 2 車 → 買い目 (lo, hi)。2 車未満は落とす。"""
+        s = d.dropna(subset=[score_col, "car_no"])
+        s = s.sort_values(KEYS + [score_col, "car_no"],
+                          ascending=[True, True, True, False, True],
+                          kind="mergesort")  # 安定ソートで決定的
+        top2 = s.groupby(KEYS, sort=False).head(2)
+        g = top2.groupby(KEYS, sort=False)["car_no"].agg(["min", "max", "count"])
+        g = g[g["count"] == 2].reset_index()
+        g["lo"] = g["min"].astype(int)
+        g["hi"] = g["max"].astype(int)
+        return g[KEYS + ["lo", "hi"]]
+
+    def _settle(picks: pd.DataFrame) -> pd.DataFrame:
+        m = picks.merge(pay_races, on=KEYS, how="left")
+        m = m.merge(pq, on=KEYS + ["lo", "hi"], how="left")
+        hit = m["odds"].notna()
+        m["is_win"] = np.where(hit, 1.0, 0.0)
+        # 払戻データがあるレースの外れ買い目は払戻 0 円。
+        # 払戻欠損レースは NaN のままレースごと除外させる (roi_gate 側で pairwise)
+        m.loc[~hit & (m["_has_payout"] == 1), "odds"] = 0.0
+        m.loc[m["_has_payout"] != 1, ["is_win", "odds"]] = np.nan
+        return m[KEYS + ["is_win", "odds"]]
+
+    champ = _settle(_picks("p_champion")).assign(p_champion=1.0, p_candidate=0.0)
+    cand = _settle(_picks("p_candidate")).assign(p_champion=0.0, p_candidate=1.0)
+    # 両モデルとも買い目を組めたレースだけ残す (同一レース集合でのペア比較)
+    common = champ[KEYS].merge(cand[KEYS], on=KEYS)
+    champ = champ.merge(common, on=KEYS)
+    cand = cand.merge(common, on=KEYS)
+    return pd.concat([champ, cand], ignore_index=True)
+
+
 def _roi_veto(models: dict[str, lgb.Booster], df: pd.DataFrame,
               oos_start: str, oos_end: str, feat_cols: list[str],
               old_meta: dict | None) -> dict:
     """採用ゲート v2: ROI 劣化拒否権 (roi_gate.py 共通仕様の呼び出し側)。
 
     champion (現役 ml_weekly_model_y_win.lgb) と candidate (models["y_win"]) を
-    同一 OOS 窓・同一レース集合上で「y_win レース内 argmax 車の単勝 1 点 100 円」
-    の ROI ペア比較にかける。精度ゲートが採用判定を出した後の最終チェックとして
-    のみ呼ぶこと。例外は evaluate_roi_gate 同様 verdict="ERROR" に畳む
+    同一 OOS 窓・同一レース集合上で「y_win 予測上位 2 車の二車複 1 点 100 円」
+    の ROI ペア比較にかける (競輪は単勝非発売のため、共通仕様の標準買い目を
+    発売券種の二車複に読み替え)。精度ゲートが採用判定を出した後の最終チェック
+    としてのみ呼ぶこと。例外は evaluate_roi_gate 同様 verdict="ERROR" に畳む
     (フェイルセーフ)。
 
-    単勝払戻は payouts.csv (bet_name='単勝'、payout/100 = 実質オッズ) から引く。
-    競輪の払戻データ (JSJ012) に単勝が存在しない間は SKIP になる
-    (race_odds.csv は 2026-05-12 更新停止のため OOS のオッズ源に使わない)。
+    二車複払戻は payouts.csv (bet_name='二車複'、kumi_ban 例 '1=2'、
+    payout/100 = 実質オッズ) から引く。「1 行 = 1 買い目候補」への整形は
+    _quinella_roi_frame 参照。race_odds.csv は 2026-05-12 更新停止のため
+    OOS のオッズ源に使わない。
     """
     try:
         champ_path = _model_path("y_win")
@@ -418,24 +508,19 @@ def _roi_veto(models: dict[str, lgb.Booster], df: pd.DataFrame,
         if len(oos) == 0:
             return {"verdict": "SKIP", "reason": "OOS 0 行のため ROI 比較不能"}
 
-        # 単勝払戻 (的中時 payout/100 = 実質オッズ)。OOS 窓に発売がなければ SKIP
+        # 二車複払戻 (的中時 payout/100 = 実質オッズ)。OOS 窓に払戻がなければ SKIP
         pay = pd.read_csv(
             DATA / "payouts.csv",
             usecols=["race_date", "place_code", "race_no",
                      "bet_name", "kumi_ban", "payout"],
         )
-        win_pay = pay[(pay["bet_name"] == "単勝")
-                      & (pay["race_date"] >= oos_start)
-                      & (pay["race_date"] <= oos_end)].copy()
-        if win_pay.empty:
+        pay_q = pay[(pay["bet_name"] == "二車複")
+                    & (pay["race_date"] >= oos_start)
+                    & (pay["race_date"] <= oos_end)]
+        if pay_q.empty:
             return {"verdict": "SKIP",
-                    "reason": "payouts.csv に OOS 窓の単勝払戻なし "
-                              "(競輪は単勝非発売) のため ROI 比較不能"}
-        win_pay["car_no"] = pd.to_numeric(win_pay["kumi_ban"], errors="coerce")
-        win_pay["odds"] = pd.to_numeric(win_pay["payout"], errors="coerce") / 100.0
-        win_pay = win_pay.dropna(subset=["car_no"])
-        win_pay["car_no"] = win_pay["car_no"].astype(int)
-        win_pay = win_pay.drop_duplicates(subset=KEYS + ["car_no"])
+                    "reason": "payouts.csv に OOS 窓の二車複払戻なし"
+                              "のため ROI 比較不能"}
 
         # champion は採用時 meta の特徴量列で予測 (candidate と列構成が違い得る)
         champ = lgb.Booster(model_file=str(champ_path))
@@ -444,14 +529,7 @@ def _roi_veto(models: dict[str, lgb.Booster], df: pd.DataFrame,
         d["p_champion"] = champ.predict(oos[champ_cols])
         d["p_candidate"] = models["y_win"].predict(
             oos[feat_cols], num_iteration=models["y_win"].best_iteration)
-        d["is_win"] = oos["y_win"].to_numpy()
-        d = d.merge(win_pay[KEYS + ["car_no", "odds"]],
-                    on=KEYS + ["car_no"], how="left")
-        # 外れ買い目は払戻 0 円 (odds は不使用のため 0 埋め)。
-        # 的中買い目のみ払戻欠損 (odds NaN) でレースごと除外させる
-        lose = d["is_win"] == 0
-        d.loc[lose, "odds"] = d.loc[lose, "odds"].fillna(0.0)
-        return evaluate_roi_gate(d, race_keys=KEYS)
+        return evaluate_roi_gate(_quinella_roi_frame(d, pay_q), race_keys=KEYS)
     except Exception as e:
         return {"verdict": "ERROR",
                 "reason": f"ROI 拒否権 実行失敗 ({type(e).__name__}: {e})"}
