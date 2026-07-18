@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## 2026-07-19 (採用ゲート v2: ROI 劣化拒否権を移植)
+
+- **weekly_retrain.py に「採用ゲート v2: ROI 劣化拒否権」を追加**
+  (hokkaido-keiba-ai 3d04c7c の 8PJ 艦隊共通仕様を移植。挙動・閾値・seed は共通)。
+  - `roi_gate.py`: 純関数 `evaluate_roi_gate()` (pandas/numpy のみ依存、raise せず
+    全例外を verdict="ERROR" に畳む)。champion / candidate の「y_win レース内
+    argmax 車の単勝 1 点 100 円」ROI を同一 OOS 窓・同一レース集合でペア比較し、
+    dROI <= -10pt かつペアブートストラップ (2000 回, seed=20260719) 95%CI 上限 < 0
+    のときのみ NG (拒否権発動)。WARN: dROI <= -5pt / SKIP: n_bets < 200 /
+    ERROR: フェイルセーフで精度ゲート判定のまま進行。
+  - `weekly_retrain.py`: [4b] として精度ゲート直後・昇格前に最小結合。
+    ROI veto NG なら 4 モデルとも昇格見送り (4 本一括採否の構造は不変)。
+    --force は ROI 拒否権も無視。retrain_history.csv に roi_* 7 列を追加
+    (旧ヘッダは tmp→os.replace で自動移行、旧行は空欄。ラグド CSV にしない)。
+    meta / rejected メタに roi_gate を記録。
+  - 単勝払戻は payouts.csv (payout/100 = 実質オッズ) から引く設計だが、
+    **競輪の払戻データ (JSJ012) に単勝は存在しない**ため、単勝オッズ源が
+    できるまでは常に SKIP (計器のみ設置)。race_odds.csv (2026-05-12 更新停止)
+    は OOS オッズ源に使わない。
+  - `tests/test_roi_gate.py`: 13 tests (NG/WARN/OK/SKIP/ERROR 5 経路 +
+    seed 再現性 + ペア除外 + ヘッダ移行後方互換)。既存 10 と合わせ 23 全合格。
+  - dry-run (read-only): 実 OOS 8 週 = 4,212 レース。実データは
+    SKIP (単勝なし) を確認、合成単勝 + champion=candidate で
+    dROI=+0.00pt / CI[+0.00,+0.00] / OK をフルパス確認。
+    実 retrain_history.csv のコピーで移行 (8 旧行保持 + 28 列化) を確認。
+  - 本番モデル (*.lgb)・メタ・fail-closed 経路は不変。pythonw 安全
+    (reconfigure 追加なし、print のみ)。
+
 ## 2026-07-12 (Codex 艦隊監査 7/11 の P1/P3 対応)
 
 - **P1: 結果/払戻の取込後に完了台帳 (race_completion.csv) が更新されない問題を修正**

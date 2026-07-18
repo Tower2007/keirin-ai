@@ -25,6 +25,20 @@
     - OOS ECE が旧比 +0.010 超悪化             → NG  (+0.005 超で WARN)
   旧メタ無し (初回) は床チェックのみで採用。--force でゲート無視 (床含む) 強制採用。
 
+採用ゲート v2: ROI 劣化拒否権 (2026-07 追加。仕様は roi_gate.py 参照):
+  精度ゲートが採用判定を出した後・モデル昇格前の最終チェックとして、champion
+  (現役 ml_weekly_model_y_win.lgb) / candidate の「y_win レース内 argmax の
+  単勝 1 点 100 円」ROI を同一 OOS 窓・同一レース集合でペア比較する。
+  dROI <= -10pt かつブートストラップ 95%CI 上限 < 0 のときのみ NG (採用拒否。
+  4 本一括採否の構造は変えず、veto 発動時は 4 モデルとも昇格見送り)。
+  SKIP (n_bets<200 or 単勝払戻なし or 初回) / ERROR (計算失敗) / WARN
+  (dROI <= -5pt) は記録のみで精度ゲートの判定に従う (フェイルセーフ:
+  ROI ゲート不具合で再学習を止めない)。--force は ROI 拒否権も無視する。
+  結果は retrain_history.csv の roi_* 列と meta の roi_gate に毎回記録。
+  注: 競輪の払戻データ (JSJ012 → payouts.csv) に単勝は存在せず、
+  race_odds.csv は 2026-05-12 に意図的更新停止のため OOS オッズ源に使わない。
+  単勝払戻が取れるようになるまでは常に SKIP (計器のみ設置) となる。
+
 学習コスト方針: ml_baseline.py のフル実行実測が約 245 秒 (logs/ml_baseline_phaseB.log)
 のため、学習期間の短縮や n_estimators 削減は行わず baseline と同条件
 (num_boost_round=800, lr=0.05, early stopping 50) を踏襲する。30 分制約に対し十分余裕。
@@ -66,6 +80,7 @@ from sklearn.metrics import roc_auc_score, log_loss, mean_absolute_error
 
 from src.config import DATA_DIR as DATA
 import ml_baseline as mlb  # 特徴量定義・dataset 構築・picks 生成を本線と完全共有
+from roi_gate import evaluate_roi_gate
 
 ROOT = Path(__file__).resolve().parent
 
@@ -378,22 +393,135 @@ def _should_adopt(new_oos: dict, old_meta: dict | None,
     )
 
 
+def _roi_veto(models: dict[str, lgb.Booster], df: pd.DataFrame,
+              oos_start: str, oos_end: str, feat_cols: list[str],
+              old_meta: dict | None) -> dict:
+    """採用ゲート v2: ROI 劣化拒否権 (roi_gate.py 共通仕様の呼び出し側)。
+
+    champion (現役 ml_weekly_model_y_win.lgb) と candidate (models["y_win"]) を
+    同一 OOS 窓・同一レース集合上で「y_win レース内 argmax 車の単勝 1 点 100 円」
+    の ROI ペア比較にかける。精度ゲートが採用判定を出した後の最終チェックとして
+    のみ呼ぶこと。例外は evaluate_roi_gate 同様 verdict="ERROR" に畳む
+    (フェイルセーフ)。
+
+    単勝払戻は payouts.csv (bet_name='単勝'、payout/100 = 実質オッズ) から引く。
+    競輪の払戻データ (JSJ012) に単勝が存在しない間は SKIP になる
+    (race_odds.csv は 2026-05-12 更新停止のため OOS のオッズ源に使わない)。
+    """
+    try:
+        champ_path = _model_path("y_win")
+        if not champ_path.exists():
+            return {"verdict": "SKIP",
+                    "reason": "champion (y_win .lgb) 不在 (初回) のため ROI 比較不能"}
+
+        oos = df[(df["race_date"] >= oos_start) & (df["race_date"] <= oos_end)]
+        if len(oos) == 0:
+            return {"verdict": "SKIP", "reason": "OOS 0 行のため ROI 比較不能"}
+
+        # 単勝払戻 (的中時 payout/100 = 実質オッズ)。OOS 窓に発売がなければ SKIP
+        pay = pd.read_csv(
+            DATA / "payouts.csv",
+            usecols=["race_date", "place_code", "race_no",
+                     "bet_name", "kumi_ban", "payout"],
+        )
+        win_pay = pay[(pay["bet_name"] == "単勝")
+                      & (pay["race_date"] >= oos_start)
+                      & (pay["race_date"] <= oos_end)].copy()
+        if win_pay.empty:
+            return {"verdict": "SKIP",
+                    "reason": "payouts.csv に OOS 窓の単勝払戻なし "
+                              "(競輪は単勝非発売) のため ROI 比較不能"}
+        win_pay["car_no"] = pd.to_numeric(win_pay["kumi_ban"], errors="coerce")
+        win_pay["odds"] = pd.to_numeric(win_pay["payout"], errors="coerce") / 100.0
+        win_pay = win_pay.dropna(subset=["car_no"])
+        win_pay["car_no"] = win_pay["car_no"].astype(int)
+        win_pay = win_pay.drop_duplicates(subset=KEYS + ["car_no"])
+
+        # champion は採用時 meta の特徴量列で予測 (candidate と列構成が違い得る)
+        champ = lgb.Booster(model_file=str(champ_path))
+        champ_cols = (old_meta or {}).get("feature_columns") or feat_cols
+        d = oos[KEYS + ["car_no"]].copy()
+        d["p_champion"] = champ.predict(oos[champ_cols])
+        d["p_candidate"] = models["y_win"].predict(
+            oos[feat_cols], num_iteration=models["y_win"].best_iteration)
+        d["is_win"] = oos["y_win"].to_numpy()
+        d = d.merge(win_pay[KEYS + ["car_no", "odds"]],
+                    on=KEYS + ["car_no"], how="left")
+        # 外れ買い目は払戻 0 円 (odds は不使用のため 0 埋め)。
+        # 的中買い目のみ払戻欠損 (odds NaN) でレースごと除外させる
+        lose = d["is_win"] == 0
+        d.loc[lose, "odds"] = d.loc[lose, "odds"].fillna(0.0)
+        return evaluate_roi_gate(d, race_keys=KEYS)
+    except Exception as e:
+        return {"verdict": "ERROR",
+                "reason": f"ROI 拒否権 実行失敗 ({type(e).__name__}: {e})"}
+
+
+def _roi_history_fields(roi: dict) -> dict:
+    """roi_gate の verdict dict を retrain_history.csv 用の列に写す。"""
+    def _v(key):
+        v = roi.get(key)
+        return "" if v is None else v
+    return {
+        "roi_champion": _v("roi_champion"),
+        "roi_candidate": _v("roi_candidate"),
+        "roi_delta_pt": _v("roi_delta_pt"),
+        "roi_ci_low": _v("roi_ci_low"),
+        "roi_ci_high": _v("roi_ci_high"),
+        "roi_n_bets": roi.get("n_bets", ""),
+        "roi_verdict": roi.get("verdict", ""),
+    }
+
+
+HISTORY_HEADER = [
+    "timestamp", "verdict", "adopted", "reason",
+    "train_end", "oos_start", "oos_end", "n_train", "n_oos",
+    "auc_win", "logloss_win", "ece_win", "auc_top2", "auc_top3",
+    "best_iter_win",
+    "old_auc_win", "old_logloss_win", "old_ece_win",
+    "regen_start", "regen_end", "runtime_sec",
+    # 採用ゲート v2 (ROI 拒否権) — 2026-07 追加。旧行は空欄のまま
+    "roi_champion", "roi_candidate", "roi_delta_pt",
+    "roi_ci_low", "roi_ci_high", "roi_n_bets", "roi_verdict",
+]
+
+
+def _migrate_history_header() -> None:
+    """既存 retrain_history.csv が旧ヘッダなら新ヘッダへ桁揃えして書き直す。
+
+    列追加時に CSV がラグド (行ごとに列数不一致) になると pandas 読者が落ちるため、
+    旧行は既知列を位置合わせでコピーし、新列は空欄で埋める (後方互換)。
+    """
+    import os
+    if not HISTORY_PATH.exists():
+        return
+    with open(HISTORY_PATH, encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+    if not rows or rows[0] == HISTORY_HEADER:
+        return
+    old_idx = {c: i for i, c in enumerate(rows[0])}
+    out = [HISTORY_HEADER]
+    for r in rows[1:]:
+        out.append([
+            r[old_idx[c]] if c in old_idx and old_idx[c] < len(r) else ""
+            for c in HISTORY_HEADER
+        ])
+    tmp = HISTORY_PATH.with_suffix(".csv.tmp")
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        csv.writer(f).writerows(out)
+    os.replace(tmp, HISTORY_PATH)
+    print(f"  履歴ヘッダ移行: {HISTORY_PATH.name} に ROI 列を追加 (旧行は空欄)")
+
+
 def _append_history(row: dict) -> None:
     """判定・採否・指標を retrain_history.csv に append (塩漬け監視用)。"""
-    header = [
-        "timestamp", "verdict", "adopted", "reason",
-        "train_end", "oos_start", "oos_end", "n_train", "n_oos",
-        "auc_win", "logloss_win", "ece_win", "auc_top2", "auc_top3",
-        "best_iter_win",
-        "old_auc_win", "old_logloss_win", "old_ece_win",
-        "regen_start", "regen_end", "runtime_sec",
-    ]
+    _migrate_history_header()
     new_file = not HISTORY_PATH.exists()
     with open(HISTORY_PATH, "a", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
         if new_file:
-            w.writerow(header)
-        w.writerow([row.get(k, "") for k in header])
+            w.writerow(HISTORY_HEADER)
+        w.writerow([row.get(k, "") for k in HISTORY_HEADER])
     print(f"  履歴 append: {HISTORY_PATH}")
 
 
@@ -560,6 +688,22 @@ def main() -> None:
     verdict, reason = _should_adopt(oos_metrics, old_meta, force=args.force)
     print(f"  verdict = {verdict}: {reason}")
 
+    # 採用ゲート v2: ROI 劣化拒否権 (精度ゲートが採用判定のときのみ最終チェック)。
+    # NG (大幅かつ有意な ROI 劣化) だけ採用をブロックする。SKIP/ERROR/WARN は
+    # 記録のみで精度ゲートの判定のまま進める (フェイルセーフ。--force は例外経路)。
+    print("\n[4b] ROI 拒否権 (採用ゲート v2)")
+    if verdict == "NG":
+        roi_res = {"verdict": "SKIP", "reason": "精度ゲート NG のため ROI 比較不要"}
+    else:
+        roi_res = _roi_veto(models, df, oos_start, oos_end, feat_cols, old_meta)
+    print(f"  roi_verdict = {roi_res['verdict']}: {roi_res.get('reason', '')}")
+    if roi_res["verdict"] == "ERROR":
+        print("  [WARN] ROI ゲート失敗。精度ゲート判定のまま進行 (フェイルセーフ)")
+    if roi_res["verdict"] == "NG" and not args.force:
+        verdict = "NG"
+        reason = f"[ROI拒否権] {roi_res.get('reason', '')} (精度ゲートは採用判定だった)"
+        print("  verdict = NG へ上書き (ROI 拒否権発動、4 モデルとも昇格見送り)")
+
     old_win = (old_meta or {}).get("oos_metrics", {}).get("y_win", {})
     hist_row = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -579,6 +723,7 @@ def main() -> None:
         "old_auc_win": round(old_win["auc"], 5) if "auc" in old_win else "",
         "old_logloss_win": round(old_win["logloss"], 6) if "logloss" in old_win else "",
         "old_ece_win": round(old_win["ece"], 5) if "ece" in old_win else "",
+        **_roi_history_fields(roi_res),
     }
 
     if verdict == "NG":
@@ -594,6 +739,7 @@ def main() -> None:
                 "rejected_reason": reason,
                 "oos_metrics": oos_metrics,
                 "train_info": train_info,
+                "roi_gate": roi_res,
             }, f, ensure_ascii=False, indent=2)
         print(f"  見送りメタ保存: {REJECTED_PATH}")
         hist_row.update({"adopted": 0, "regen_start": "", "regen_end": "",
@@ -617,6 +763,7 @@ def main() -> None:
         "feature_columns": feat_cols,
         "quality_gate_verdict": verdict,
         "adoption_reason": reason,
+        "roi_gate": roi_res,
     }
     adopt_models(models, meta)
 
