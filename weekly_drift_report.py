@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import subprocess
 import sys
 from collections import defaultdict
@@ -157,6 +158,50 @@ def compute_market_health(start: date, end: date) -> dict:
 
 
 GATE_A_BETS = ["SH2", "ST2", "RH3", "RT3"]  # WH2/WT2 は未発売が多く n 不足のため対象外
+
+# ─── 総合状態の単一判定 (2026-08-05 統合監視指摘 P1) ────────────────────
+# 件名と本文ヘッダが別ロジックで状態を出し矛盾していた
+# (件名 ⚠️ = 取得漏れ検知、本文 🟢 = 日次 status のみ) ため、ここで一元化する。
+# 判定条件は本文末尾の「判定基準」ブロックにも同じ文言で出す。
+OVERALL_CRITERIA = [
+    "🔴 NG: データロスト日 (❌) が1日でもある",
+    "🟡 WARN: 警告日 (⚠️) が1日でもある、または取得漏れ候補が1件でもある",
+    "🟢 OK: 上記いずれにも該当しない",
+    "※ 当日 (🟡 TODAY 進行中) は結果が未確定のため判定対象外。"
+    "「OK n/m日」の分母 m も確定日数のみを数える",
+]
+
+
+def compute_overall_status(daily: list[dict], missing: list[dict]) -> dict:
+    """週次レポートの総合状態を1箇所で決める (件名・本文の唯一の情報源)。
+
+    返り値: {level, mark, label, color, n_ok_days, n_total_days,
+             n_warn, n_nodata, n_missing, n_inprogress}
+      level: "OK" | "WARN" | "NG"
+      mark : 🟢 / 🟡 / 🔴 (件名・本文で共通利用)
+
+    当日は "🟡 TODAY (進行中)" で結果未確定のため、判定からも
+    「OK n/m日」の分母からも除外する (除外しないと全て正常でも
+    OK 6/7日 と表示され、受信者が欠損と誤読する)。
+    """
+    n_inprogress = sum(1 for d in daily if d["status"].startswith("🟡"))
+    settled = [d for d in daily if not d["status"].startswith("🟡")]
+    n_warn = sum(1 for d in settled if d["status"].startswith("⚠️"))
+    n_nodata = sum(1 for d in settled if d["status"].startswith("❌"))
+    n_missing = len(missing)
+    if n_nodata > 0:
+        level, mark, label, color = "NG", "🔴", "NG", "#c62828"
+    elif n_warn > 0 or n_missing > 0:
+        level, mark, label, color = "WARN", "🟡", "WARN", "#f9a825"
+    else:
+        level, mark, label, color = "OK", "🟢", "OK", "#2e7d32"
+    return {
+        "level": level, "mark": mark, "label": label, "color": color,
+        "n_ok_days": sum(1 for d in settled if d["status"].startswith("✅")),
+        "n_total_days": len(settled),
+        "n_warn": n_warn, "n_nodata": n_nodata, "n_missing": n_missing,
+        "n_inprogress": n_inprogress,
+    }
 
 
 def evaluate_gate_a(end: date) -> dict:
@@ -540,7 +585,7 @@ def check_cron_health() -> list[dict]:
 def _md_daily_health(start: date, end: date) -> list[str]:
     """セクション 0: データスクレイピング日次ヘルス。"""
     L: list[str] = []
-    L.append("## 0. データスクレイピング 日次ヘルス (auto/boat 形式)")
+    L.append("## 1. データスクレイピング 日次ヘルス (auto/boat 形式)")
     L.append("")
     daily = get_daily_ingestion_health(start, end)
     if not daily:
@@ -565,7 +610,7 @@ def _md_daily_health(start: date, end: date) -> list[str]:
 def _md_cron_health() -> list[str]:
     """セクション 0-2: cron タスク死活。"""
     L: list[str] = []
-    L.append("## 0-2. cron タスク死活")
+    L.append("## 2. cron タスク死活")
     L.append("")
     cron_status = check_cron_health()
     L.append("| Task | Last Run | Last Result | Next Run | Status |")
@@ -587,7 +632,7 @@ def _md_cron_health() -> list[str]:
 def _md_coverage(log_rows: list[dict]) -> list[str]:
     """セクション 1: 蓄積カバレッジ (offset 別 status 分布)。"""
     L: list[str] = []
-    L.append("## 1. 蓄積カバレッジ (offset 別 status 分布)")
+    L.append("## 3. 蓄積カバレッジ (offset 別 status 分布)")
     L.append("")
     if not log_rows:
         L.append("⚠️ **未蓄積**: `prerace_snapshot_log.csv` に対象期間のデータが無い。")
@@ -611,7 +656,7 @@ def _md_coverage(log_rows: list[dict]) -> list[str]:
 def _md_timing(log_rows: list[dict]) -> list[str]:
     """セクション 2: 取得タイミング精度。"""
     L: list[str] = []
-    L.append("## 2. 取得タイミング精度 (target_offset_min vs 実測 minutes_before_start)")
+    L.append("## 4. 取得タイミング精度 (target_offset_min vs 実測 minutes_before_start)")
     L.append("")
     if not log_rows:
         L.append("⚠️ 未蓄積。蓄積開始後に offset 別の実測ズレ (mean ± std) を表示。")
@@ -629,7 +674,7 @@ def _md_timing(log_rows: list[dict]) -> list[str]:
 def _md_drift(health: dict) -> list[str]:
     """セクション 3: 実測 settlement wedge (snapshot odds → 確定配当の乖離)。"""
     L: list[str] = []
-    L.append("## 3. 実測ドリフト (settlement wedge, 当選組)")
+    L.append("## 5. 実測ドリフト (settlement wedge, 当選組)")
     L.append("")
     L.append("wedge = 実現配当(payout/100) / snapshot odds − 1。median<0 = 当選側で不利。")
     L.append("W はレンジオッズで点 wedge が定義できないため除外。")
@@ -649,7 +694,7 @@ def _md_drift(health: dict) -> list[str]:
 def _md_market_health(health: dict) -> list[str]:
     """セクション 4: Market Health (overround)。"""
     L: list[str] = []
-    L.append("## 4. Market Health (overround)")
+    L.append("## 6. Market Health (overround)")
     L.append("")
     L.append("最新 snapshot dedup 後の Σ(1/odds)。基準 ≈1.34 (控除率25%)。")
     L.append("大きく外れたら odds 取得/dedup の破損を疑う。")
@@ -669,7 +714,7 @@ def _md_market_health(health: dict) -> list[str]:
 def _md_completion(missing: list[dict]) -> list[str]:
     """セクション 5: per-race 完了状態 (取得漏れ候補、監査 P1-3)。"""
     L: list[str] = []
-    L.append("## 5. per-race 完了状態 (取得漏れ候補)")
+    L.append("## 7. per-race 完了状態 (取得漏れ候補)")
     L.append("")
     L.append("race_completion.csv より。canceled (着順なし=中止) は正当欠損として除外済。")
     L.append("")
@@ -696,7 +741,7 @@ def _md_gate_a(gate: dict) -> list[str]:
     RT3 を gate B で外しても timing が永続 FAIL する衝突があった)。
     """
     L: list[str] = []
-    L.append("## 7. freeze gate A 判定 (snapshot timing lock, offset×券種)")
+    L.append("## 8. freeze gate A 判定 (snapshot timing lock, offset×券種)")
     L.append("")
     L.append("基準: CLAUDE.md「凍結基準」参照。gate B は戦略候補券種の PASS のみ参照する。")
     L.append("**通過 = その offset×券種の timing 固定可であり収益の保証ではない。**")
@@ -737,7 +782,7 @@ def _md_actions(log_rows: list[dict], health: dict) -> list[str]:
     ok 行数は同一レースを最大 5 重カウントし観測数を過大表示していた。
     """
     L: list[str] = []
-    L.append("## 6. アクション推奨")
+    L.append("## 9. アクション推奨")
     L.append("")
     n_races = count_unique_ok_races(log_rows) if log_rows else 0
     n_wedge = health.get("n_wedge_races", 0)
@@ -752,6 +797,16 @@ def _md_actions(log_rows: list[dict], health: dict) -> list[str]:
                  "overround / 完了状態を見て行う (行数 gate は廃止)")
     L.append("")
     L.append("---")
+    L.append("")
+    L.append("## 判定基準 (件名・本文の総合状態)")
+    L.append("")
+    L.append("件名と本文ヘッダの状態は同一の判定関数 "
+             "(`compute_overall_status`) が決めており、常に一致する。")
+    L.append("")
+    for c in OVERALL_CRITERIA:
+        L.append(f"- {c}")
+    L.append("")
+    L.append("---")
     L.append("生成: `python weekly_drift_report.py`")
     return L
 
@@ -764,6 +819,15 @@ def render_report(start: date, end: date,
     """マークダウンレポート文字列を生成。"""
     L: list[str] = []
     L.append(f"# Weekly Drift Report ({start.isoformat()} ~ {end.isoformat()})")
+    L.append("")
+    # 総合状態は件名・HTML と同一関数 (compute_overall_status) から取る
+    overall = compute_overall_status(get_daily_ingestion_health(start, end),
+                                     missing)
+    L.append(f"**総合状態: {overall['mark']}{overall['label']}** "
+             f"(OK {overall['n_ok_days']}/{overall['n_total_days']}日 / "
+             f"⚠️ {overall['n_warn']}日 / ❌ {overall['n_nodata']}日 / "
+             f"取得漏れ {overall['n_missing']}件 / "
+             f"進行中 {overall['n_inprogress']}日は判定対象外)")
     L.append("")
     L.append(f"生成時刻: {datetime.now().isoformat(timespec='seconds')}")
     L.append("")
@@ -793,36 +857,53 @@ HTML_TD_L = 'style="text-align:left; padding:6px 10px; border:1px solid #ddd;"'
 HTML_TD_R = 'style="text-align:right; padding:6px 10px; border:1px solid #ddd;"'
 HTML_ROW_ALT = 'style="background:#fafafa;"'
 
+# セル基本スタイル (属性形ではなく宣言のみ。td() が単一 style= に合成する)
+_TD_BASE_L = "text-align:left; padding:6px 10px; border:1px solid #ddd;"
+_TD_BASE_R = "text-align:right; padding:6px 10px; border:1px solid #ddd;"
+# 条件付き装飾 (2026-08-05 P3: 以前は基本 style と別の style= として出力され、
+# HTML が先勝ちで後を捨てるため色・太字が一切効いていなかった)
+TD_OK = "color:#2e7d32; font-weight:bold;"
+TD_BAD = "color:#d32f2f; font-weight:bold;"
+TD_WARN = "color:#f57f17; font-weight:bold;"
+TD_MUTED = "color:#999;"
+
+
+def td(content, extra: str = "", right: bool = False) -> str:
+    """<td> を生成。基本 style と条件付き style を **単一の style 属性**に合成する。
+
+    セル生成をこの関数に集約することで style= の二重出力が構造的に起こらない
+    (2026-08-05 統合監視 P3 指摘の再発防止)。
+    検出: grep -c 'style="[^"]*"\\s*style="' <出力HTML> が 0 になること。
+    """
+    base = _TD_BASE_R if right else _TD_BASE_L
+    style = f"{base} {extra}".strip()
+    return f'<td style="{style}">{content}</td>'
+
 
 def _html_header(start: date, end: date, daily: list[dict],
-                 n_snap_total: int) -> list[str]:
-    """div 開始 + タイトル h2 + サマリ行 (件名と整合)。"""
-    n_total = len(daily)
-    n_ok_days = sum(1 for d in daily if d["status"].startswith("✅"))
-    n_warn = sum(1 for d in daily if d["status"].startswith("⚠️"))
-    n_nodata = sum(1 for d in daily if d["status"].startswith("❌"))
-    if n_nodata > 0:
-        overall = ("🔴 異常", "#c62828")
-    elif n_warn > 0:
-        overall = ("🟡 要確認", "#f9a825")
-    else:
-        overall = ("🟢 正常", "#2e7d32")
+                 n_snap_total: int, overall: dict) -> list[str]:
+    """div 開始 + タイトル h2 + サマリ行。
 
+    状態バッジは compute_overall_status の結果のみを使う (件名と同一の変数)。
+    """
     p: list[str] = []
     p.append('<div style="font-family:Arial,sans-serif; font-size:14px; '
              'color:#222; line-height:1.55; max-width:880px;">')
     p.append(
-        f'<h2 style="color:{overall[1]}; margin:0 0 12px 0; '
-        f'padding-bottom:6px; border-bottom:2px solid {overall[1]};">'
+        f'<h2 style="color:{overall["color"]}; margin:0 0 12px 0; '
+        f'padding-bottom:6px; border-bottom:2px solid {overall["color"]};">'
         f'🚴 keirin-ai 週次 drift report &nbsp; '
         f'<span style="color:#222; font-weight:normal;">{start} 〜 {end}</span>'
-        f' &nbsp; <span style="font-weight:normal;">{overall[0]}</span></h2>'
+        f' &nbsp; <span style="font-weight:normal;">'
+        f'{overall["mark"]}{overall["label"]}</span></h2>'
     )
     p.append(
         f'<p style="margin:0 0 12px 0; color:#555;">'
-        f'OK <b>{n_ok_days}</b>/{n_total}日 &nbsp;|&nbsp; '
-        f'⚠️ 警告 <b>{n_warn}</b>日 &nbsp;|&nbsp; '
-        f'❌ ロスト <b>{n_nodata}</b>日 &nbsp;|&nbsp; '
+        f'OK <b>{overall["n_ok_days"]}</b>/{overall["n_total_days"]}日 '
+        f'&nbsp;|&nbsp; ⚠️ 警告 <b>{overall["n_warn"]}</b>日 &nbsp;|&nbsp; '
+        f'❌ ロスト <b>{overall["n_nodata"]}</b>日 &nbsp;|&nbsp; '
+        f'取得漏れ <b>{overall["n_missing"]}</b>件 &nbsp;|&nbsp; '
+        f'進行中 <b>{overall["n_inprogress"]}</b>日 (判定対象外) &nbsp;|&nbsp; '
         f'累計 snapshots <b>{n_snap_total:,}</b></p>'
     )
     return p
@@ -832,7 +913,7 @@ def _html_daily_health(daily: list[dict]) -> list[str]:
     """セクション 0: データスクレイピング日次ヘルス。"""
     p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '0. データスクレイピング日次ヘルス</h3>')
+             '1. データスクレイピング日次ヘルス</h3>')
     p.append(f'<table {HTML_TBL}>')
     p.append(
         f'<tr><th {HTML_TH}>日付</th><th {HTML_TH_R}>場</th>'
@@ -844,28 +925,25 @@ def _html_daily_health(daily: list[dict]) -> list[str]:
     for i, d in enumerate(daily):
         alt = HTML_ROW_ALT if i % 2 == 1 else ""
         if d["status"].startswith("✅"):
-            color = "#2e7d32"
+            st_extra = TD_OK
         elif d["status"].startswith("🟡"):
-            color = "#666"
+            st_extra = "color:#666; font-weight:bold;"
         elif d["status"].startswith("⚠️"):
-            color = "#f57f17"
+            st_extra = TD_WARN
         else:
-            color = "#c62828"
-        status_cell = (f'<td {HTML_TD_L} style="text-align:left; padding:6px 10px; '
-                       f'border:1px solid #ddd; color:{color}; '
-                       f'font-weight:bold;">{d["status"]}</td>')
+            st_extra = TD_BAD
         p.append(
             f'<tr {alt}>'
-            f'<td {HTML_TD_L}>{d["date"]}</td>'
-            f'<td {HTML_TD_R}>{d["venues"]}</td>'
-            f'<td {HTML_TD_R}>{d["entries"]:,}</td>'
-            f'<td {HTML_TD_R}>{d["lines"]:,}</td>'
-            f'<td {HTML_TD_R}>{d["stats"]:,}</td>'
-            f'<td {HTML_TD_R}>{d["results"]:,}</td>'
-            f'<td {HTML_TD_R}>{d["payouts"]:,}</td>'
-            f'<td {HTML_TD_R}>{d["snapshots_ok"]:,}</td>'
-            f'{status_cell}'
-            f'</tr>'
+            + td(d["date"])
+            + td(f'{d["venues"]}', right=True)
+            + td(f'{d["entries"]:,}', right=True)
+            + td(f'{d["lines"]:,}', right=True)
+            + td(f'{d["stats"]:,}', right=True)
+            + td(f'{d["results"]:,}', right=True)
+            + td(f'{d["payouts"]:,}', right=True)
+            + td(f'{d["snapshots_ok"]:,}', right=True)
+            + td(d["status"], st_extra)
+            + '</tr>'
         )
     p.append('</table>')
     p.append('<p style="color:#666; font-size:12px; margin:4px 0 0 0;">'
@@ -879,7 +957,7 @@ def _html_cron_health(cron_status: list[dict]) -> list[str]:
     """セクション 0-2: cron タスク死活。"""
     p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '0-2. cron タスク死活</h3>')
+             '2. cron タスク死活</h3>')
     p.append(f'<table {HTML_TBL}>')
     p.append(f'<tr><th {HTML_TH}>Task</th><th {HTML_TH}>Last Run</th>'
              f'<th {HTML_TH}>Last Result</th><th {HTML_TH}>Next Run</th>'
@@ -888,17 +966,15 @@ def _html_cron_health(cron_status: list[dict]) -> list[str]:
         alt = HTML_ROW_ALT if i % 2 == 1 else ""
         is_ok = c["last_result"] in CRON_OK_RESULTS
         mark = "✅" if is_ok else "⚠️"
-        color = "#2e7d32" if is_ok else "#c62828"
         p.append(
             f'<tr {alt}>'
-            f'<td {HTML_TD_L}><b>{c["task"]}</b></td>'
-            f'<td {HTML_TD_L}>{c["last_run"]}</td>'
-            f'<td {HTML_TD_L} style="text-align:left; padding:6px 10px; '
-            f'border:1px solid #ddd; color:{color};">'
-            f'{mark} {c["last_result"]}</td>'
-            f'<td {HTML_TD_L}>{c["next_run"]}</td>'
-            f'<td {HTML_TD_L}>{c["status"]}</td>'
-            f'</tr>'
+            + td(f'<b>{c["task"]}</b>')
+            + td(c["last_run"])
+            + td(f'{mark} {c["last_result"]}',
+                 "color:#2e7d32;" if is_ok else "color:#d32f2f;")
+            + td(c["next_run"])
+            + td(c["status"])
+            + '</tr>'
         )
     p.append('</table>')
     p.append('<p style="color:#666; font-size:12px; margin:4px 0 0 0;">'
@@ -911,7 +987,7 @@ def _html_coverage(cov: dict[float, dict[str, int]]) -> list[str]:
     """セクション 1: 蓄積カバレッジ。"""
     p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '1. 蓄積カバレッジ (offset 別 status 分布)</h3>')
+             '3. 蓄積カバレッジ (offset 別 status 分布)</h3>')
     if not cov:
         p.append('<p style="color:#999;">⚠️ 未蓄積</p>')
     else:
@@ -936,7 +1012,7 @@ def _html_timing(timing: dict[float, dict[str, float]]) -> list[str]:
     """セクション 2: 取得タイミング精度。"""
     p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '2. 取得タイミング精度 (target vs 実測)</h3>')
+             '4. 取得タイミング精度 (target vs 実測)</h3>')
     if not timing:
         p.append('<p style="color:#999;">⚠️ 未蓄積</p>')
     else:
@@ -960,7 +1036,7 @@ def _html_drift_health(health: dict, missing: list[dict]) -> list[str]:
     """セクション 3-5: 実測 wedge / overround / 完了状態 (監査 P1-1/P1-3)。"""
     p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '3. 実測ドリフト (settlement wedge, 当選組, W除外)</h3>')
+             '5. 実測ドリフト (settlement wedge, 当選組, W除外)</h3>')
     if not health["wedge"]:
         p.append('<p style="color:#999;">⚠️ 期間内に測定可能データなし</p>')
     else:
@@ -969,18 +1045,20 @@ def _html_drift_health(health: dict, missing: list[dict]) -> list[str]:
                  f'<th {HTML_TH_R}>n_races</th><th {HTML_TH_R}>median wedge%</th>'
                  f'<th {HTML_TH_R}>|w|&gt;10%</th><th {HTML_TH_R}>不利%</th></tr>')
         for r in health["wedge"]:
-            color = "#c00" if r["median_pct"] < -3 else "#333"
+            med_extra = TD_BAD if r["median_pct"] < -3 else "color:#333;"
             p.append(
-                f'<tr><td {HTML_TD_L}>{r["bet"]}</td>'
-                f'<td {HTML_TD_R}>{r["offset"]}</td>'
-                f'<td {HTML_TD_R}>{r["n_races"]}</td>'
-                f'<td {HTML_TD_R} style="color:{color};"><b>{r["median_pct"]}</b></td>'
-                f'<td {HTML_TD_R}>{r["gt10_pct"]}</td>'
-                f'<td {HTML_TD_R}>{r["adverse_pct"]}</td></tr>')
+                '<tr>'
+                + td(r["bet"])
+                + td(r["offset"], right=True)
+                + td(r["n_races"], right=True)
+                + td(f'<b>{r["median_pct"]}</b>', med_extra, right=True)
+                + td(r["gt10_pct"], right=True)
+                + td(r["adverse_pct"], right=True)
+                + '</tr>')
         p.append('</table>')
 
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '4. Market Health (overround, 基準≈1.34)</h3>')
+             '6. Market Health (overround, 基準≈1.34)</h3>')
     if not health["overround"]:
         p.append('<p style="color:#999;">⚠️ 期間内データなし</p>')
     else:
@@ -991,7 +1069,7 @@ def _html_drift_health(health: dict, missing: list[dict]) -> list[str]:
         p.append(f'<p>{cells}</p>')
 
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '5. per-race 完了状態 (取得漏れ候補)</h3>')
+             '7. per-race 完了状態 (取得漏れ候補)</h3>')
     if not missing:
         p.append('<p style="color:#2a7;">✅ 期間内の取得漏れ候補なし</p>')
     else:
@@ -1007,7 +1085,7 @@ def _html_gate_a(gate: dict) -> list[str]:
     """セクション 7: freeze gate A 判定 (offset×券種マトリクス)。"""
     p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '7. freeze gate A (snapshot timing lock, offset×券種)</h3>')
+             '8. freeze gate A (snapshot timing lock, offset×券種)</h3>')
     p.append(f'<table {HTML_TBL}>')
     p.append(f'<tr><th {HTML_TH_R}>offset (分前)</th><th {HTML_TH}>共有条件</th>'
              + "".join(f'<th {HTML_TH}>{bt}</th>' for bt in GATE_A_BETS)
@@ -1039,7 +1117,7 @@ def _html_actions(n_races: int, health: dict) -> list[str]:
     同一レース最大 5 重カウントのため廃止)。
     """
     p: list[str] = []
-    p.append('<h3 style="color:#444; margin:18px 0 8px 0;">6. アクション推奨</h3>')
+    p.append('<h3 style="color:#444; margin:18px 0 8px 0;">9. アクション推奨</h3>')
     if n_races < 30:
         action = "🟡 蓄積期 (races&lt;30): drift 評価不能、観測継続"
     elif n_races < 50:
@@ -1050,6 +1128,14 @@ def _html_actions(n_races: int, health: dict) -> list[str]:
     p.append(f'<p>期間内 ok snapshot ユニークレース数: <b>{n_races:,}</b> '
              f'(wedge 実測可能: {health.get("n_wedge_races", 0):,})<br>{action}</p>')
 
+    # 判定基準 (件名と本文が同一関数から出ることを明記、2026-08-05 P1)
+    p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
+             '判定基準 (件名・本文の総合状態)</h3>')
+    p.append('<p style="color:#555; margin:0 0 6px 0;">件名と本文ヘッダの状態は '
+             '同一の判定関数が決めており、常に一致する。</p>')
+    p.append('<ul style="margin:0 0 8px 0; padding-left:20px; color:#555;">'
+             + "".join(f'<li>{c}</li>' for c in OVERALL_CRITERIA)
+             + '</ul>')
     p.append(
         '<hr style="border:none; border-top:1px solid #ddd; '
         'margin:18px 0 8px 0;">'
@@ -1075,9 +1161,10 @@ def render_report_html(start: date, end: date,
     timing = summarize_actual_offset(log_rows) if log_rows else {}
     n_snap_total = sum(d["snapshots_ok"] for d in daily)
     n_races = count_unique_ok_races(log_rows) if log_rows else 0
+    overall = compute_overall_status(daily, missing)
 
     p: list[str] = []
-    p.extend(_html_header(start, end, daily, n_snap_total))
+    p.extend(_html_header(start, end, daily, n_snap_total, overall))
     p.extend(_html_daily_health(daily))
     p.extend(_html_cron_health(cron_status))
     p.extend(_html_coverage(cov))
@@ -1101,34 +1188,20 @@ def _send_mail_report(report: str, out_path: Path,
         print(f"⚠️ gmail_notify import 失敗: {e}", file=sys.stderr)
         return
     # メール本文は markdown 全文 (Gmail 上は等幅で読めるので十分)
-    # 件名にサマリを入れる (健全日数 + ユニークレース数で一目検知)
-    n_ok = count_unique_ok_races(log_rows) if log_rows else 0
+    # 件名の状態は本文ヘッダと同一の compute_overall_status から取る
+    # (2026-08-05 統合監視 P1: 件名 ⚠️ / 本文 🟢 の矛盾を解消)。
+    # 書式: [keirin] 🚴 週次 <送信日> 🟡WARN (OK 6/7日 / races 472 / 取得漏れ1)
+    #   - 日付は期間ではなく送信日 1 つ (期間は本文見出しにある)
+    n_races = count_unique_ok_races(log_rows) if log_rows else 0
     daily_health = get_daily_ingestion_health(start, end)
-    n_total = len(daily_health)
-    n_ok_days = sum(
-        1 for d in daily_health if d["status"].startswith("✅")
-    )
-    n_warn_days = sum(
-        1 for d in daily_health if d["status"].startswith("⚠️")
-    )
-    n_no_data = sum(
-        1 for d in daily_health if d["status"].startswith("❌")
-    )
-    # 件名: 全部 OK なら ✅、警告/エラーあれば ⚠️/❌
-    if n_no_data > 0:
-        mark = "❌"
-    elif n_warn_days > 0:
-        mark = "⚠️"
-    else:
-        mark = "✅"
-    # 取得漏れ候補があれば件名でも警告 (監査 P1-3)
-    if missing and mark == "✅":
-        mark = "⚠️"
-    subject = (
-        f"{mark} [keirin-ai] 週次 {start}~{end} "
-        f"OK {n_ok_days}/{n_total}日 / races {n_ok}"
-        + (f" / 取得漏れ{len(missing)}" if missing else "")
-    )
+    overall = compute_overall_status(daily_health, missing)
+    sent_date = date.today().isoformat()
+    detail = (f"OK {overall['n_ok_days']}/{overall['n_total_days']}日 "
+              f"/ races {n_races}")
+    if overall["n_missing"]:
+        detail += f" / 取得漏れ{overall['n_missing']}"
+    subject = (f"[keirin] 🚴 週次 {sent_date} "
+               f"{overall['mark']}{overall['label']} ({detail})")
     # HTML 版を生成 (Gmail で見栄え良い表に)
     html_body = render_report_html(start, end, log_rows, health, missing, gate)
     try:
@@ -1138,6 +1211,9 @@ def _send_mail_report(report: str, out_path: Path,
             html=html_body,
             attachments=[str(out_path)],
         )
+        # 送信成功をログに残す (統合監視の突合用)
+        to_addr = os.environ.get("NOTIFY_TO", "(NOTIFY_TO 未設定)")
+        print(f"[mail] sent to {to_addr}")
     except Exception as e:
         print(f"⚠️ メール送信失敗: {e}", file=sys.stderr)
 
