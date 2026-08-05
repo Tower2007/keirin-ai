@@ -504,6 +504,16 @@ def _roi_veto(models: dict[str, lgb.Booster], df: pd.DataFrame,
             return {"verdict": "SKIP",
                     "reason": "champion (y_win .lgb) 不在 (初回) のため ROI 比較不能"}
 
+        # champion の学習期間が今回の OOS 窓に食い込むと champion 側が in-sample
+        # となり比較が汚れる (champion が不当に有利 = 良い candidate を誤って拒否
+        # する方向)。通常の週次運用では 1 週ずれるので起きないが、--oos-weeks
+        # 拡大時などの安全弁 (hokkaido/nankan からの移植、2026-08-05)。
+        champ_end = ((old_meta or {}).get("train_info") or {}).get("train_date_max", "")
+        if champ_end and champ_end >= oos_start:
+            return {"verdict": "SKIP",
+                    "reason": (f"champion 学習終端 {champ_end} が OOS 窓 "
+                               f"({oos_start}〜) と重なるため比較不能 (in-sample 回避)")}
+
         oos = df[(df["race_date"] >= oos_start) & (df["race_date"] <= oos_end)]
         if len(oos) == 0:
             return {"verdict": "SKIP", "reason": "OOS 0 行のため ROI 比較不能"}
