@@ -164,11 +164,11 @@ GATE_A_BETS = ["SH2", "ST2", "RH3", "RT3"]  # WH2/WT2 は未発売が多く n �
 # (件名 ⚠️ = 取得漏れ検知、本文 🟢 = 日次 status のみ) ため、ここで一元化する。
 # 判定条件は本文末尾の「判定基準」ブロックにも同じ文言で出す。
 OVERALL_CRITERIA = [
-    "🔴 NG: データロスト日 (❌) が1日でもある",
-    "🟡 WARN: 警告日 (⚠️) が1日でもある、または取得漏れ候補が1件でもある",
-    "🟢 OK: 上記いずれにも該当しない",
-    "※ 当日 (🟡 TODAY 進行中) は結果が未確定のため判定対象外。"
-    "「OK n/m日」の分母 m も確定日数のみを数える",
+    "🔴NG (異常): データ欠損日 (❌) が1日でもある",
+    "🟡WARN (要確認): 警告日 (⚠️) が1日でもある、または取得漏れ候補が1件でもある",
+    "🟢OK (正常): 上記いずれにも該当しない",
+    "※ 当日 (🟡 本日・進行中) は結果が未確定のため判定対象外。"
+    "「正常 n/m日」の分母 m も確定した日数のみを数える",
 ]
 
 
@@ -180,7 +180,7 @@ def compute_overall_status(daily: list[dict], missing: list[dict]) -> dict:
       level: "OK" | "WARN" | "NG"
       mark : 🟢 / 🟡 / 🔴 (件名・本文で共通利用)
 
-    当日は "🟡 TODAY (進行中)" で結果未確定のため、判定からも
+    当日は "🟡 本日 (進行中)" で結果未確定のため、判定からも
     「OK n/m日」の分母からも除外する (除外しないと全て正常でも
     OK 6/7日 と表示され、受信者が欠損と誤読する)。
     """
@@ -308,20 +308,20 @@ def evaluate_gate_a(end: date) -> dict:
             # --- 共有条件 (offset 単位) ---
             shared_fails: list[str] = []
             if settled < 150:
-                shared_fails.append(f"settled {settled}<150")
+                shared_fails.append(f"判定対象R {settled}<150")
             if coverage < 0.98:
-                shared_fails.append(f"coverage {coverage:.1%}<98%")
+                shared_fails.append(f"取得率 {coverage:.1%}<98%")
             if post_start > 0:
                 shared_fails.append(f"発走後取得 {post_start}")
             if lag_null_rate > 0.50:
                 # 秒精度列 null の ok 行を黙って素通しさせない (監査 07-11)。
                 # 全行 null (lag_p95=NaN) もここに含まれる
                 shared_fails.append(
-                    f"lag未計測 (null {lag_null_rate:.0%}>50%)")
+                    f"遅延未計測 ({lag_null_rate:.0%}>50%)")
             elif not (lag_p95 == lag_p95):  # NaN (防御的、通常は上で捕捉)
-                shared_fails.append("lag 未計測")
+                shared_fails.append("遅延未計測")
             elif lag_p95 > 10:
-                shared_fails.append(f"lag_p95 {lag_p95:.0f}s>10s")
+                shared_fails.append(f"遅延p95 {lag_p95:.0f}秒>10秒")
             if shared_fails:
                 shared_all_pass = False
 
@@ -331,17 +331,17 @@ def evaluate_gate_a(end: date) -> dict:
                 bf: list[str] = []
                 w = mw[mw["bet_type"] == bt]["wedge"].dropna()
                 if len(w) == 0:
-                    bf.append("n=0")
+                    bf.append("データ0件")
                 else:
                     med = abs(float(w.median())) * 100
                     p90 = float(w.abs().quantile(0.90)) * 100
                     p10 = float((w.abs() > 0.10).mean()) * 100
                     if med > 1.0:
-                        bf.append(f"|med|{med:.1f}%>1%")
+                        bf.append(f"中央値{med:.1f}%>1%")
                     if p90 > 5.0:
-                        bf.append(f"P90 {p90:.1f}%>5%")
+                        bf.append(f"上位10%が{p90:.1f}%>5%")
                     if p10 > 5.0:
-                        bf.append(f">10% {p10:.1f}%>5%")
+                        bf.append(f"ズレ10%超が{p10:.1f}%>5%")
                 if bf:
                     bet_fails[bt] = bf
                     bet_all_pass[bt] = False
@@ -517,17 +517,17 @@ def get_daily_ingestion_health(start: date, end: date) -> list[dict]:
         snaps = snap_ok.get(ds, 0)
         # status 判定
         if c["entries"] == 0:
-            status = "❌ NO_DATA"
+            status = "❌ データなし"
         elif d == today:
-            status = "🟡 TODAY (進行中)"
+            status = "🟡 本日 (進行中)"
         elif c["results"] == 0:
-            status = "⚠️ RESULTS_MISSING"
+            status = "⚠️ 着順欠落"
         elif c["lines"] == 0:
-            status = "⚠️ LINES_MISSING"
+            status = "⚠️ ライン欠落"
         elif snaps == 0:
-            status = "⚠️ NO_SNAPSHOT"
+            status = "⚠️ オッズ未取得"
         else:
-            status = "✅ OK"
+            status = "✅ 正常"
         rows.append({
             "date": ds,
             "venues": c["venues"],
@@ -585,13 +585,13 @@ def check_cron_health() -> list[dict]:
 def _md_daily_health(start: date, end: date) -> list[str]:
     """セクション 0: データスクレイピング日次ヘルス。"""
     L: list[str] = []
-    L.append("## 1. データスクレイピング 日次ヘルス (auto/boat 形式)")
+    L.append("## 1. 日次の取得状況")
     L.append("")
     daily = get_daily_ingestion_health(start, end)
     if not daily:
         L.append("(集計不能)")
     else:
-        L.append("| 日付 | 場 | entries | lines | stats | results | payouts | snapshots | status |")
+        L.append("| 日付 | 場 | 出走表 | ライン | 選手成績 | 着順 | 払戻 | オッズ取得 | 状態 |")
         L.append("|---|---:|---:|---:|---:|---:|---:|---:|---|")
         for d in daily:
             L.append(
@@ -600,9 +600,9 @@ def _md_daily_health(start: date, end: date) -> list[str]:
                 f"{d['payouts']} | {d['snapshots_ok']} | {d['status']} |"
             )
     L.append("")
-    L.append("**status 凡例**: ✅ OK / 🟡 TODAY (進行中) / "
-             "⚠️ LINES_MISSING (narabi 取り逃し) / "
-             "⚠️ RESULTS_MISSING / ⚠️ NO_SNAPSHOT / ❌ NO_DATA")
+    L.append("**状態の凡例**: ✅ 正常 / 🟡 本日 (進行中) / "
+             "⚠️ ライン欠落 (並びの取り逃し) / "
+             "⚠️ 着順欠落 / ⚠️ オッズ未取得 / ❌ データなし")
     L.append("")
     return L
 
@@ -610,10 +610,10 @@ def _md_daily_health(start: date, end: date) -> list[str]:
 def _md_cron_health() -> list[str]:
     """セクション 0-2: cron タスク死活。"""
     L: list[str] = []
-    L.append("## 2. cron タスク死活")
+    L.append("## 2. 定期タスクの死活")
     L.append("")
     cron_status = check_cron_health()
-    L.append("| Task | Last Run | Last Result | Next Run | Status |")
+    L.append("| タスク | 前回実行 | 前回結果 | 次回実行 | 状態 |")
     L.append("|---|---|---|---|---|")
     for c in cron_status:
         ok_marker = "✅" if c["last_result"] in CRON_OK_RESULTS else "⚠️"
@@ -622,9 +622,9 @@ def _md_cron_health() -> list[str]:
             f"{ok_marker} {c['last_result']} | {c['next_run']} | {c['status']} |"
         )
     L.append("")
-    L.append("**Last Result**: 0=成功 / 267009=実行中 (daemon は朝〜夜走る) / "
+    L.append("**前回結果**: 0=成功 / 267009=実行中 (常駐は朝〜夜走る) / "
              "267011=未実行。それ以外はエラー。"
-             "**Last Run が古すぎる** = cron 止まっている疑い。")
+             "**前回実行が古すぎる** = 定期タスクが止まっている疑い。")
     L.append("")
     return L
 
@@ -632,7 +632,7 @@ def _md_cron_health() -> list[str]:
 def _md_coverage(log_rows: list[dict]) -> list[str]:
     """セクション 1: 蓄積カバレッジ (offset 別 status 分布)。"""
     L: list[str] = []
-    L.append("## 3. 蓄積カバレッジ (offset 別 status 分布)")
+    L.append("## 3. 取得時点ごとの成否内訳")
     L.append("")
     if not log_rows:
         L.append("⚠️ **未蓄積**: `prerace_snapshot_log.csv` に対象期間のデータが無い。")
@@ -640,7 +640,7 @@ def _md_coverage(log_rows: list[dict]) -> list[str]:
         L.append("- 開催あり日が来れば自動的に行が増える")
     else:
         cov = summarize_coverage(log_rows)
-        L.append("| offset (分前) | ok | no_odds | fail | total |")
+        L.append("| 取得時点 (分前) | 成功 | オッズなし | 失敗 | 合計 |")
         L.append("|---:|---:|---:|---:|---:|")
         for off in sorted(cov.keys(), reverse=True):
             s = cov[off]
@@ -656,13 +656,13 @@ def _md_coverage(log_rows: list[dict]) -> list[str]:
 def _md_timing(log_rows: list[dict]) -> list[str]:
     """セクション 2: 取得タイミング精度。"""
     L: list[str] = []
-    L.append("## 4. 取得タイミング精度 (target_offset_min vs 実測 minutes_before_start)")
+    L.append("## 4. 取得タイミング精度 (狙い vs 実測)")
     L.append("")
     if not log_rows:
-        L.append("⚠️ 未蓄積。蓄積開始後に offset 別の実測ズレ (mean ± std) を表示。")
+        L.append("⚠️ 未蓄積。蓄積開始後に取得時点ごとの実測ズレ (平均 ± 標準偏差) を表示。")
     else:
         timing = summarize_actual_offset(log_rows)
-        L.append("| offset (狙い) | n_ok | 実測 mean (分前) | 実測 std |")
+        L.append("| 狙い (分前) | 成功数 | 実測 平均 (分前) | 実測 標準偏差 |")
         L.append("|---:|---:|---:|---:|")
         for off in sorted(timing.keys(), reverse=True):
             t = timing[off]
@@ -674,15 +674,16 @@ def _md_timing(log_rows: list[dict]) -> list[str]:
 def _md_drift(health: dict) -> list[str]:
     """セクション 3: 実測 settlement wedge (snapshot odds → 確定配当の乖離)。"""
     L: list[str] = []
-    L.append("## 5. 実測ドリフト (settlement wedge, 当選組)")
+    L.append("## 5. 実測ドリフト (約定ズレ、当選組)")
     L.append("")
-    L.append("wedge = 実現配当(payout/100) / snapshot odds − 1。median<0 = 当選側で不利。")
-    L.append("W はレンジオッズで点 wedge が定義できないため除外。")
+    L.append("ズレ = 実際の配当 ÷ 取得時のオッズ − 1。中央値がマイナスなら当選側で不利。")
+    L.append("ワイドは配当に幅があり1点のズレを定義できないため除外。")
     L.append("")
     if not health["wedge"]:
         L.append("⚠️ 期間内に wedge を測れる (snapshot ∩ 当選組) データなし。")
     else:
-        L.append("| 券種 | offset (分前) | n_races | median wedge% | \\|w\\|>10% | 不利% |")
+        L.append("| 券種 | 取得時点 (分前) | レース数 | ズレ中央値% "
+                 "| \\|ズレ\\|>10% | 不利% |")
         L.append("|---|---:|---:|---:|---:|---:|")
         for r in health["wedge"]:
             L.append(f"| {r['bet']} | {r['offset']} | {r['n_races']} | "
@@ -694,15 +695,15 @@ def _md_drift(health: dict) -> list[str]:
 def _md_market_health(health: dict) -> list[str]:
     """セクション 4: Market Health (overround)。"""
     L: list[str] = []
-    L.append("## 6. Market Health (overround)")
+    L.append("## 6. 市場の健全性 (オーバーラウンド)")
     L.append("")
-    L.append("最新 snapshot dedup 後の Σ(1/odds)。基準 ≈1.34 (控除率25%)。")
-    L.append("大きく外れたら odds 取得/dedup の破損を疑う。")
+    L.append("最新の取得分だけを使った 1/オッズ の合計。基準は約1.34 (控除率25%)。")
+    L.append("大きく外れたらオッズ取得か重複除去の不具合を疑う。")
     L.append("")
     if not health["overround"]:
         L.append("⚠️ 期間内データなし。")
     else:
-        L.append("| 券種 | n_races | overround median |")
+        L.append("| 券種 | レース数 | オーバーラウンド中央値 |")
         L.append("|---|---:|---:|")
         for r in health["overround"]:
             flag = "" if 1.25 <= r["ov_median"] <= 1.45 else " ⚠️"
@@ -714,9 +715,9 @@ def _md_market_health(health: dict) -> list[str]:
 def _md_completion(missing: list[dict]) -> list[str]:
     """セクション 5: per-race 完了状態 (取得漏れ候補、監査 P1-3)。"""
     L: list[str] = []
-    L.append("## 7. per-race 完了状態 (取得漏れ候補)")
+    L.append("## 7. レース単位の取得完了状態 (取得漏れ候補)")
     L.append("")
-    L.append("race_completion.csv より。canceled (着順なし=中止) は正当欠損として除外済。")
+    L.append("レース単位の完了表より。中止 (着順なし) は正当な欠損として除外済み。")
     L.append("")
     if not missing:
         L.append("✅ 期間内の取得漏れ候補なし。")
@@ -741,28 +742,29 @@ def _md_gate_a(gate: dict) -> list[str]:
     RT3 を gate B で外しても timing が永続 FAIL する衝突があった)。
     """
     L: list[str] = []
-    L.append("## 8. freeze gate A 判定 (snapshot timing lock, offset×券種)")
+    L.append("## 8. 凍結ゲートA 判定 (取得時点の固定可否、取得時点×券種)")
     L.append("")
-    L.append("基準: CLAUDE.md「凍結基準」参照。gate B は戦略候補券種の PASS のみ参照する。")
-    L.append("**通過 = その offset×券種の timing 固定可であり収益の保証ではない。**")
+    L.append("基準: CLAUDE.md「凍結基準」参照。ゲートB は戦略候補の券種の合格のみ参照する。")
+    L.append("**合格 = その取得時点×券種で時刻を固定してよい、という意味であり収益の保証ではない。**")
     L.append("")
-    L.append(f"- 直近 14 日の未解決 missing: **{gate['missing_14d']}**")
+    L.append(f"- 直近 14 日の未回収の取得漏れ: **{gate['missing_14d']}** 件")
     L.append("")
     # offset × 券種 の判定マトリクス
-    L.append("| offset (分前) | 共有条件 | " + " | ".join(GATE_A_BETS) + " |")
+    L.append("| 取得時点 (分前) | 共通条件 | " + " | ".join(GATE_A_BETS) + " |")
     L.append("|---:|---|" + "---|" * len(GATE_A_BETS))
     for off, data in gate["offsets"].items():
         sh = "✅" if data["shared_pass"] else "❌"
         cells = " | ".join(
-            "🟢 PASS" if data["bet_verdicts"].get(bt) else "🔴 FAIL"
+            "🟢 合格" if data["bet_verdicts"].get(bt) else "🔴 不合格"
             for bt in GATE_A_BETS)
         L.append(f"| {off} | {sh} | {cells} |")
     L.append("")
     # 週別詳細 (共有条件 + 券種別 fail 理由)
     for off, data in gate["offsets"].items():
-        L.append(f"### offset {off} 分前 (週別詳細)")
+        L.append(f"### {off} 分前 (週別の詳細)")
         L.append("")
-        L.append("| 週 | settled | cov% | 発走後 | \\|lag\\| p95 | lag null% | 共有 | 券種別 fail |")
+        L.append("| 週 | 判定対象R | 取得率% | 発走後 | 遅延p95(秒) "
+                 "| 遅延未計測% | 共通条件 | 券種別の不合格理由 |")
         L.append("|---|---:|---:|---:|---:|---:|---|---|")
         for w in data["weeks"]:
             sh = "✅" if w["shared_pass"] else "❌ " + "; ".join(w["shared_fails"])
@@ -786,22 +788,21 @@ def _md_actions(log_rows: list[dict], health: dict) -> list[str]:
     L.append("")
     n_races = count_unique_ok_races(log_rows) if log_rows else 0
     n_wedge = health.get("n_wedge_races", 0)
-    L.append(f"- 期間内 ok snapshot ユニークレース数: **{n_races}** "
-             f"(wedge 実測可能: {n_wedge})")
+    L.append(f"- 期間内に取得できたレース数: **{n_races}** "
+             f"(うちズレを実測できたもの: {n_wedge})")
     if n_races < 30:
-        L.append("- 🟡 蓄積期 (races<30): drift 評価不能、観測継続")
+        L.append("- 🟡 蓄積期 (30レース未満): ズレの評価はまだできない。観測を継続")
     elif n_races < 50:
-        L.append("- 🟡 監査期 (races=30〜50): drift 定量化開始、戦略はまだ固定しない")
+        L.append("- 🟡 監査期 (30〜50レース): ズレの定量化を開始。戦略はまだ固定しない")
     else:
-        L.append("- 🟢 観測十分 (races≥50): ただし freeze 判定は本表の実測 wedge / "
-                 "overround / 完了状態を見て行う (行数 gate は廃止)")
+        L.append("- 🟢 観測十分 (50レース以上): ただし凍結の判断は、本レポートの実測ズレ / "
+                 "オーバーラウンド / 取得完了状態を見て行う")
     L.append("")
     L.append("---")
     L.append("")
     L.append("## 判定基準 (件名・本文の総合状態)")
     L.append("")
-    L.append("件名と本文ヘッダの状態は同一の判定関数 "
-             "(`compute_overall_status`) が決めており、常に一致する。")
+    L.append("件名と本文ヘッダの状態は同一の判定処理が決めており、常に一致する。")
     L.append("")
     for c in OVERALL_CRITERIA:
         L.append(f"- {c}")
@@ -818,7 +819,7 @@ def render_report(start: date, end: date,
                   gate: dict) -> str:
     """マークダウンレポート文字列を生成。"""
     L: list[str] = []
-    L.append(f"# Weekly Drift Report ({start.isoformat()} ~ {end.isoformat()})")
+    L.append(f"# 週次ドリフト監視レポート ({start.isoformat()} 〜 {end.isoformat()})")
     L.append("")
     # 総合状態は件名・HTML と同一関数 (compute_overall_status) から取る
     overall = compute_overall_status(get_daily_ingestion_health(start, end),
@@ -831,7 +832,7 @@ def render_report(start: date, end: date,
     L.append("")
     L.append(f"生成時刻: {datetime.now().isoformat(timespec='seconds')}")
     L.append("")
-    L.append("Phase 6 R3 (Codex 5/15 提案 P2、Gemini EHI 監視に相当)。")
+    L.append("発走前オッズの取得状況と、取得時点ごとの価格のズレを監視する。")
     L.append("")
     L.extend(_md_daily_health(start, end))
     L.extend(_md_cron_health())
@@ -892,7 +893,7 @@ def _html_header(start: date, end: date, daily: list[dict],
     p.append(
         f'<h2 style="color:{overall["color"]}; margin:0 0 12px 0; '
         f'padding-bottom:6px; border-bottom:2px solid {overall["color"]};">'
-        f'🚴 keirin-ai 週次 drift report &nbsp; '
+        f'🚴 keirin-ai 週次ドリフト監視レポート &nbsp; '
         f'<span style="color:#222; font-weight:normal;">{start} 〜 {end}</span>'
         f' &nbsp; <span style="font-weight:normal;">'
         f'{overall["mark"]}{overall["label"]}</span></h2>'
@@ -904,7 +905,7 @@ def _html_header(start: date, end: date, daily: list[dict],
         f'❌ ロスト <b>{overall["n_nodata"]}</b>日 &nbsp;|&nbsp; '
         f'取得漏れ <b>{overall["n_missing"]}</b>件 &nbsp;|&nbsp; '
         f'進行中 <b>{overall["n_inprogress"]}</b>日 (判定対象外) &nbsp;|&nbsp; '
-        f'累計 snapshots <b>{n_snap_total:,}</b></p>'
+        f'オッズ取得 累計 <b>{n_snap_total:,}</b> 件</p>'
     )
     return p
 
@@ -913,14 +914,14 @@ def _html_daily_health(daily: list[dict]) -> list[str]:
     """セクション 0: データスクレイピング日次ヘルス。"""
     p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '1. データスクレイピング日次ヘルス</h3>')
+             '1. 日次の取得状況</h3>')
     p.append(f'<table {HTML_TBL}>')
     p.append(
         f'<tr><th {HTML_TH}>日付</th><th {HTML_TH_R}>場</th>'
-        f'<th {HTML_TH_R}>entries</th><th {HTML_TH_R}>lines</th>'
-        f'<th {HTML_TH_R}>stats</th><th {HTML_TH_R}>results</th>'
-        f'<th {HTML_TH_R}>payouts</th><th {HTML_TH_R}>snapshots</th>'
-        f'<th {HTML_TH}>status</th></tr>'
+        f'<th {HTML_TH_R}>出走表</th><th {HTML_TH_R}>ライン</th>'
+        f'<th {HTML_TH_R}>選手成績</th><th {HTML_TH_R}>着順</th>'
+        f'<th {HTML_TH_R}>払戻</th><th {HTML_TH_R}>オッズ取得</th>'
+        f'<th {HTML_TH}>状態</th></tr>'
     )
     for i, d in enumerate(daily):
         alt = HTML_ROW_ALT if i % 2 == 1 else ""
@@ -947,9 +948,9 @@ def _html_daily_health(daily: list[dict]) -> list[str]:
         )
     p.append('</table>')
     p.append('<p style="color:#666; font-size:12px; margin:4px 0 0 0;">'
-             '✅ OK / 🟡 TODAY (進行中) / '
-             '⚠️ LINES_MISSING (narabi 取り逃し) / '
-             '⚠️ RESULTS_MISSING / ⚠️ NO_SNAPSHOT / ❌ NO_DATA</p>')
+             '✅ 正常 / 🟡 本日 (進行中) / '
+             '⚠️ ライン欠落 (並びの取り逃し) / '
+             '⚠️ 着順欠落 / ⚠️ オッズ未取得 / ❌ データなし</p>')
     return p
 
 
@@ -957,11 +958,11 @@ def _html_cron_health(cron_status: list[dict]) -> list[str]:
     """セクション 0-2: cron タスク死活。"""
     p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '2. cron タスク死活</h3>')
+             '2. 定期タスクの死活</h3>')
     p.append(f'<table {HTML_TBL}>')
-    p.append(f'<tr><th {HTML_TH}>Task</th><th {HTML_TH}>Last Run</th>'
-             f'<th {HTML_TH}>Last Result</th><th {HTML_TH}>Next Run</th>'
-             f'<th {HTML_TH}>Status</th></tr>')
+    p.append(f'<tr><th {HTML_TH}>タスク</th><th {HTML_TH}>前回実行</th>'
+             f'<th {HTML_TH}>前回結果</th><th {HTML_TH}>次回実行</th>'
+             f'<th {HTML_TH}>状態</th></tr>')
     for i, c in enumerate(cron_status):
         alt = HTML_ROW_ALT if i % 2 == 1 else ""
         is_ok = c["last_result"] in CRON_OK_RESULTS
@@ -978,7 +979,7 @@ def _html_cron_health(cron_status: list[dict]) -> list[str]:
         )
     p.append('</table>')
     p.append('<p style="color:#666; font-size:12px; margin:4px 0 0 0;">'
-             'Last Result: 0=成功 / 267009=実行中 (daemon は朝〜夜稼働) / '
+             '前回結果: 0=成功 / 267009=実行中 (常駐は朝〜夜稼働) / '
              '267011=未実行 / それ以外=エラー</p>')
     return p
 
@@ -987,14 +988,14 @@ def _html_coverage(cov: dict[float, dict[str, int]]) -> list[str]:
     """セクション 1: 蓄積カバレッジ。"""
     p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '3. 蓄積カバレッジ (offset 別 status 分布)</h3>')
+             '3. 取得時点ごとの成否内訳</h3>')
     if not cov:
         p.append('<p style="color:#999;">⚠️ 未蓄積</p>')
     else:
         p.append(f'<table {HTML_TBL}>')
-        p.append(f'<tr><th {HTML_TH_R}>offset (分前)</th><th {HTML_TH_R}>ok</th>'
-                 f'<th {HTML_TH_R}>no_odds</th><th {HTML_TH_R}>fail</th>'
-                 f'<th {HTML_TH_R}>total</th></tr>')
+        p.append(f'<tr><th {HTML_TH_R}>取得時点 (分前)</th><th {HTML_TH_R}>成功</th>'
+                 f'<th {HTML_TH_R}>オッズなし</th><th {HTML_TH_R}>失敗</th>'
+                 f'<th {HTML_TH_R}>合計</th></tr>')
         for off in sorted(cov.keys(), reverse=True):
             s = cov[off]
             ok = s.get("ok", 0); no_odds = s.get("no_odds", 0); fail = s.get("fail", 0)
@@ -1012,14 +1013,14 @@ def _html_timing(timing: dict[float, dict[str, float]]) -> list[str]:
     """セクション 2: 取得タイミング精度。"""
     p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '4. 取得タイミング精度 (target vs 実測)</h3>')
+             '4. 取得タイミング精度 (狙い vs 実測)</h3>')
     if not timing:
         p.append('<p style="color:#999;">⚠️ 未蓄積</p>')
     else:
         p.append(f'<table {HTML_TBL}>')
-        p.append(f'<tr><th {HTML_TH_R}>offset (狙い)</th><th {HTML_TH_R}>n_ok</th>'
-                 f'<th {HTML_TH_R}>実測 mean (分前)</th>'
-                 f'<th {HTML_TH_R}>実測 std</th></tr>')
+        p.append(f'<tr><th {HTML_TH_R}>狙い (分前)</th><th {HTML_TH_R}>成功数</th>'
+                 f'<th {HTML_TH_R}>実測 平均 (分前)</th>'
+                 f'<th {HTML_TH_R}>実測 標準偏差</th></tr>')
         for off in sorted(timing.keys(), reverse=True):
             t = timing[off]
             p.append(
@@ -1036,13 +1037,13 @@ def _html_drift_health(health: dict, missing: list[dict]) -> list[str]:
     """セクション 3-5: 実測 wedge / overround / 完了状態 (監査 P1-1/P1-3)。"""
     p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '5. 実測ドリフト (settlement wedge, 当選組, W除外)</h3>')
+             '5. 実測ドリフト (約定ズレ、当選組、ワイド除外)</h3>')
     if not health["wedge"]:
         p.append('<p style="color:#999;">⚠️ 期間内に測定可能データなし</p>')
     else:
         p.append(f'<table {HTML_TBL}>')
-        p.append(f'<tr><th {HTML_TH}>券種</th><th {HTML_TH_R}>offset</th>'
-                 f'<th {HTML_TH_R}>n_races</th><th {HTML_TH_R}>median wedge%</th>'
+        p.append(f'<tr><th {HTML_TH}>券種</th><th {HTML_TH_R}>取得時点</th>'
+                 f'<th {HTML_TH_R}>レース数</th><th {HTML_TH_R}>ズレ中央値%</th>'
                  f'<th {HTML_TH_R}>|w|&gt;10%</th><th {HTML_TH_R}>不利%</th></tr>')
         for r in health["wedge"]:
             med_extra = TD_BAD if r["median_pct"] < -3 else "color:#333;"
@@ -1058,7 +1059,7 @@ def _html_drift_health(health: dict, missing: list[dict]) -> list[str]:
         p.append('</table>')
 
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '6. Market Health (overround, 基準≈1.34)</h3>')
+             '6. 市場の健全性 (オーバーラウンド、基準≈1.34)</h3>')
     if not health["overround"]:
         p.append('<p style="color:#999;">⚠️ 期間内データなし</p>')
     else:
@@ -1069,7 +1070,7 @@ def _html_drift_health(health: dict, missing: list[dict]) -> list[str]:
         p.append(f'<p>{cells}</p>')
 
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '7. per-race 完了状態 (取得漏れ候補)</h3>')
+             '7. レース単位の取得完了状態 (取得漏れ候補)</h3>')
     if not missing:
         p.append('<p style="color:#2a7;">✅ 期間内の取得漏れ候補なし</p>')
     else:
@@ -1085,9 +1086,9 @@ def _html_gate_a(gate: dict) -> list[str]:
     """セクション 7: freeze gate A 判定 (offset×券種マトリクス)。"""
     p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
-             '8. freeze gate A (snapshot timing lock, offset×券種)</h3>')
+             '8. 凍結ゲートA (取得時点の固定可否、取得時点×券種)</h3>')
     p.append(f'<table {HTML_TBL}>')
-    p.append(f'<tr><th {HTML_TH_R}>offset (分前)</th><th {HTML_TH}>共有条件</th>'
+    p.append(f'<tr><th {HTML_TH_R}>取得時点 (分前)</th><th {HTML_TH}>共通条件</th>'
              + "".join(f'<th {HTML_TH}>{bt}</th>' for bt in GATE_A_BETS)
              + '</tr>')
     for off, data in gate["offsets"].items():
@@ -1095,17 +1096,17 @@ def _html_gate_a(gate: dict) -> list[str]:
               else '<span style="color:#c00;">❌</span>')
         cells = "".join(
             f'<td {HTML_TD_L}>'
-            + ('<b style="color:#2a7;">PASS</b>'
+            + ('<b style="color:#2a7;">合格</b>'
                if data["bet_verdicts"].get(bt)
-               else '<b style="color:#c00;">FAIL</b>')
+               else '<b style="color:#c00;">不合格</b>')
             + '</td>'
             for bt in GATE_A_BETS)
         p.append(f'<tr><td {HTML_TD_R}><b>{off}</b></td>'
                  f'<td {HTML_TD_L}>{sh}</td>{cells}</tr>')
     p.append('</table>')
     p.append(f'<p style="color:#999; font-size:12px;">'
-             f'直近14日 missing={gate["missing_14d"]}。基準は CLAUDE.md 凍結基準。'
-             f'gate B は戦略候補券種の PASS のみ参照。通過=timing固定可、'
+             f'直近14日の未回収の取得漏れ={gate["missing_14d"]}件。基準は CLAUDE.md 凍結基準。'
+             f'ゲートB は戦略候補の券種の合格のみ参照。合格=取得時点を固定してよい、'
              f'収益保証ではない。</p>')
     return p
 
@@ -1119,14 +1120,15 @@ def _html_actions(n_races: int, health: dict) -> list[str]:
     p: list[str] = []
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">9. アクション推奨</h3>')
     if n_races < 30:
-        action = "🟡 蓄積期 (races&lt;30): drift 評価不能、観測継続"
+        action = "🟡 蓄積期 (30レース未満): ズレの評価はまだできない。観測を継続"
     elif n_races < 50:
-        action = "🟡 監査期 (races=30〜50): drift 定量化開始、戦略は未固定"
+        action = "🟡 監査期 (30〜50レース): ズレの定量化を開始。戦略はまだ固定しない"
     else:
-        action = ("🟢 観測十分 (races≥50): freeze 判定は実測 wedge / overround / "
-                  "完了状態で行う (行数 gate 廃止)")
-    p.append(f'<p>期間内 ok snapshot ユニークレース数: <b>{n_races:,}</b> '
-             f'(wedge 実測可能: {health.get("n_wedge_races", 0):,})<br>{action}</p>')
+        action = ("🟢 観測十分 (50レース以上): ただし凍結の判断は、実測ズレ / "
+                  "オーバーラウンド / 取得完了状態を見て行う")
+    p.append(f'<p>期間内に取得できたレース数: <b>{n_races:,}</b> '
+             f'(うちズレを実測できたもの: {health.get("n_wedge_races", 0):,})'
+             f'<br>{action}</p>')
 
     # 判定基準 (件名と本文が同一関数から出ることを明記、2026-08-05 P1)
     p.append('<h3 style="color:#444; margin:18px 0 8px 0;">'
@@ -1140,7 +1142,7 @@ def _html_actions(n_races: int, health: dict) -> list[str]:
         '<hr style="border:none; border-top:1px solid #ddd; '
         'margin:18px 0 8px 0;">'
         '<p style="color:#999; font-size:11px; margin:0;">'
-        'keirin-ai weekly drift report</p>'
+        'keirin-ai 週次ドリフト監視レポート</p>'
     )
     p.append('</div>')
     return p
