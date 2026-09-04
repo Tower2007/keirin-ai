@@ -54,6 +54,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.config import DATA_DIR
 from src.netkeirin_client import NetkeirinClient
 from src.netkeirin_parser import parse_odds_lists
+from src.odds_prerace import monthly_name
 from src.storage import append_rows
 
 # logging: pythonw だと stdout が無いのでファイル必須
@@ -221,7 +222,10 @@ def capture_race(
         r["minutes_before_start"] = minutes_before
         r["target_offset_min"] = off_disp
 
-    n = append_rows("race_odds_prerace.csv", rows)
+    # 月次パーティション race_odds_prerace_YYYY-MM.csv (race_date の年月) に追記。
+    # 旧単一ファイル race_odds_prerace.csv にはもう書かない (2026-09-04、
+    # 800MB 全読みの解消。読み手は src/odds_prerace.py 経由で月次+旧を統合)。
+    n = append_rows(monthly_name(race_date), rows)
     logger.info(
         "  R%d off=%s: captured %d rows (mins_before=%d, official_dt=%s)",
         race_no, off_disp, n, minutes_before,

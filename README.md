@@ -17,7 +17,12 @@
 省略時はプロジェクト直下 `data/` (`.gitignore` 済)。
 
 - 大容量ファイル (`race_odds.csv` 約 2.5 GB) を Google Drive Stream 上で active write すると壊れるため、Drive は完成 ZIP の保管庫としてのみ使う (`scripts/backup_to_drive.py`)
-- `race_odds.csv` (発走後オッズ) は 2026-05-12 以降更新停止、`race_odds_prerace.csv` (発走前スナップショット) が本線
+- `race_odds.csv` (発走後オッズ) は 2026-05-12 以降更新停止、発走前スナップショット (`race_odds_prerace_YYYY-MM.csv`) が本線
+- 発走前スナップショットは **月次パーティション** (2026-09-04〜): デーモンは `race_odds_prerace_YYYY-MM.csv` (race_date の年月) に追記する。
+  読み手は `src/odds_prerace.py` (`read_prerace` / `load_prerace_dedup`) 経由で必要月だけ読み、確定月の dedup 結果を
+  `cache/odds_prerace_dedup_YYYY-MM.parquet` にキャッシュする。旧単一ファイル `race_odds_prerace.csv` は
+  `scripts/partition_odds_prerace.py` で分割済み (元は `race_odds_prerace.csv.bak-<日時>` として保持)。
+  旧ファイルが残っていれば読み手はそれも読む (再実行で月次へ吸収、冪等)
 - 主要 CSV の構成とキーは `CLAUDE.md` の「CSV ファイル構成」を参照
 
 ## 自動実行タスク (Windows タスクスケジューラ)

@@ -24,14 +24,15 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config import DATA_DIR
+from src.odds_prerace import iter_partition_rows, list_partition_files
 
 
 def main() -> None:
-    odds_path = DATA_DIR / "race_odds_prerace.csv"
+    odds_files = list_partition_files(DATA_DIR)
     log_path = DATA_DIR / "prerace_snapshot_log.csv"
 
-    if not odds_path.exists():
-        print(f"❌ {odds_path} 不在")
+    if not odds_files:
+        print(f"❌ {DATA_DIR} に race_odds_prerace_*.csv / race_odds_prerace.csv 不在")
         return
 
     # 既存 log を読んで dedup 用に保持
@@ -51,28 +52,27 @@ def main() -> None:
     Key = tuple[str, str, str, str]  # date, pc, race_no, target_offset_min
     info: dict[Key, dict] = {}
 
-    with open(odds_path, "r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        for r in reader:
-            key = (r["race_date"], r["place_code"], r["race_no"],
-                   r.get("target_offset_min", ""))
-            if not key[3]:
-                continue  # 旧 schema (target_offset_min 無し) は除外
-            if key in info:
-                info[key]["n_rows"] += 1
-            else:
-                info[key] = {
-                    "race_date": r["race_date"],
-                    "place_code": r["place_code"],
-                    "race_no": r["race_no"],
-                    "st_time": "",  # race_odds_prerace には st_time 列無し
-                    "snapshot_dt": r.get("snapshot_dt", ""),
-                    "minutes_before_start": r.get("minutes_before_start", ""),
-                    "target_offset_min": key[3],
-                    "status": "ok",  # データが存在 = ok 扱い
-                    "n_rows": 1,
-                    "note": "rebuilt_from_odds_csv",
-                }
+    # 月次パーティション + 旧単一ファイルを逐次走査 (2026-09-04)
+    for r in iter_partition_rows(DATA_DIR):
+        key = (r["race_date"], r["place_code"], r["race_no"],
+               r.get("target_offset_min", ""))
+        if not key[3]:
+            continue  # 旧 schema (target_offset_min 無し) は除外
+        if key in info:
+            info[key]["n_rows"] += 1
+        else:
+            info[key] = {
+                "race_date": r["race_date"],
+                "place_code": r["place_code"],
+                "race_no": r["race_no"],
+                "st_time": "",  # race_odds_prerace には st_time 列無し
+                "snapshot_dt": r.get("snapshot_dt", ""),
+                "minutes_before_start": r.get("minutes_before_start", ""),
+                "target_offset_min": key[3],
+                "status": "ok",  # データが存在 = ok 扱い
+                "n_rows": 1,
+                "note": "rebuilt_from_odds_csv",
+            }
 
     print(f"race_odds_prerace.csv 由来 entries: {len(info):,}")
 

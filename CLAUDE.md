@@ -70,7 +70,13 @@ ingest_day.py は **差分取り込み** に対応しているため、同じ ve
   ピンポイントで snapshot 取得 → 最終レース後に exit
 - 取得タイミング精度: ±数秒 (毎分 cron 方式 ±1分 より高精度)
 - CMD ウィンドウ点滅なし (毎分 cron の UX 問題を解消)
-- 保存先: `race_odds_prerace.csv` (既存 `race_odds.csv` とは別ファイル)
+- 保存先: `race_odds_prerace_YYYY-MM.csv` (race_date の年月で月次パーティション、2026-09-04〜。
+  既存 `race_odds.csv` とは別ファイル)。旧単一ファイル `race_odds_prerace.csv` (800MB/13.6M 行) は
+  `scripts/partition_odds_prerace.py` で分割済み (元は `.bak-<日時>` で保持)。
+  **読み手は必ず `src/odds_prerace.py` の `read_prerace` / `load_prerace_dedup` を使う**
+  (月次 + 残っていれば旧ファイルを統合し、確定月の dedup を `cache/odds_prerace_dedup_YYYY-MM.parquet`
+  にキャッシュ)。`pd.read_csv(DATA_DIR / "race_odds_prerace.csv")` を直接書かないこと。
+  回帰テスト: `tests/test_odds_prerace.py`
 - `snapshot_dt` (こちらの観測時刻) と `official_dt` (netkeirin 表示時刻) を分離記録
 - 試行ログは `prerace_snapshot_log.csv` (成功・失敗・no_odds を全部記録、dedup に使用)
 - 7:00 lines cron 失敗時は entries 未準備で最大 50 分 retry してから諦め
@@ -288,7 +294,7 @@ schtasks /create /tn "keirin-ai-lines" /sc daily /st 07:00 ^
 | `--use-odds --use-line` | `final_odds_line_upper_bound` | ❌ 研究のみ |
 | `--use-odds --use-mispricing` | `final_odds_mp_upper_bound` (5/13 失敗確認) | ❌ |
 
-**本番 EV 計算**: `production_no_odds` のモデル予測 × `race_odds_prerace.csv` の
+**本番 EV 計算**: `production_no_odds` のモデル予測 × `race_odds_prerace_YYYY-MM.csv` の
 live snapshot odds を使う (Codex 5/15 設計)。`race_odds.csv` の post-start odds
 を特徴に入れたモデルは drift で使えないため。
 

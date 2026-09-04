@@ -1,5 +1,35 @@
 # CHANGELOG
 
+## 2026-09-04 (直前オッズ CSV の月次パーティション化)
+
+- **背景**: `race_odds_prerace.csv` が 807MB / 13.6M 行 (+230MB/月) に育ち、週次の
+  `ev_prerace_pipeline.py` が毎回全読み (read 17.7s / RAM 1.9GB、1 年で 2.4GB 超見込み)。
+- **書き手** `ingest_odds_prerace_daemon.py`: 追記先を `race_odds_prerace_YYYY-MM.csv`
+  (**race_date の年月**) に変更。旧単一ファイルにはもう書かない。`src/storage.py` に
+  `schema_for()` を追加し、月次名を `race_odds_prerace.csv` のスキーマに読み替える。
+  鍵に race_date を選んだ理由: 読み手は全て race_date で期間指定する / dedup 鍵に
+  race_date を含むためレースの全 snapshot が同一ファイルに閉じ、月単位の独立 dedup
+  (=キャッシュ) が全体 dedup と厳密一致する。
+- **読み手** 新設 `src/odds_prerace.py`: `read_prerace(usecols, dtype, start, end)` で
+  必要月 (+残っていれば旧ファイル) だけ読む。`load_prerace_dedup()` は確定月 (当月より前)
+  の dedup 結果を `DATA_DIR/cache/odds_prerace_dedup_YYYY-MM.parquet` にキャッシュ
+  (元ファイルの size/mtime をフィンガープリントに保存し、変化すれば再計算。pyarrow 不在や
+  書込失敗時はキャッシュ無しで続行)。dedup の意味論 (odds>0、(race,bet,kumi) 毎に
+  snapshot_dt 最新) は不変でテストで固定。呼び替え: `ev_prerace_pipeline.py`
+  (`--no-cache` / `--dry-run` を追加)、`weekly_drift_report.py` (2 箇所)、
+  `analyze_settlement_wedge.py`、`market_blend_eval.py`、`phase_ac_analysis.py`、
+  `scripts/rebuild_snapshot_log.py`。
+- **移行** `scripts/partition_odds_prerace.py` (`--dry-run` あり): 逐次ストリームで RAM 一定、
+  旧ファイルを `.lock` 下で `race_odds_prerace.csv.bak-<日時>` にリネームしてから月別 `.part`
+  に転記 → 最後にまとめて反映。行数一致を検証して `<bak>.migrated.json` を書く。冪等
+  (旧ファイルが無ければ no-op、再生成されていれば既存月次へ追記)。本番 D: で実行済み
+  (13,603,868 行 → 5 か月、行数一致、21.4s)。
+- テスト `tests/test_odds_prerace.py` 12 件追加 (混在読込=単一ファイル dedup 一致 /
+  キャッシュ有無一致+無効化 / 移行の行数保存・冪等・dry-run・invalid 行隔離 /
+  デーモン追記先が月別)。既存 30 と合わせ 42 全合格。
+- 統合監視 (mgmt) `config/projects.yaml` の keirin `backend.files` は
+  `race_odds_prerace.csv` を鮮度監視しているため、月次 glob への差し替えが必要 (mgmt 側で対応)。
+
 ## 2026-07-19 (採用ゲート v2: ROI 拒否権を「二車複」読み替えで実効化)
 
 - **ROI ゲートの標準買い目を単勝 → 二車複へ読み替え** (f719f97 の移植時は

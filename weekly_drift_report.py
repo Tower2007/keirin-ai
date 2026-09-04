@@ -38,6 +38,7 @@ from pathlib import Path
 from statistics import mean, stdev
 
 from src.config import DATA_DIR
+from src.odds_prerace import read_prerace
 
 if sys.stdout is not None:
     try:
@@ -108,18 +109,16 @@ def compute_market_health(start: date, end: date) -> dict:
     W (ワイド) はレンジオッズで点 wedge が定義できないため除外 (監査 P2)。
     """
     import pandas as pd
-    path = DATA_DIR / "race_odds_prerace.csv"
     empty = {"wedge": [], "overround": [], "n_wedge_races": 0}
-    if not path.exists():
-        return empty
     keys = ["race_date", "place_code", "race_no"]
     jkeys = keys + ["bet_type", "kumi_ban"]
-    odds = pd.read_csv(
-        path,
+    # 月次パーティション (race_odds_prerace_YYYY-MM.csv) から期間分だけ読む (2026-09-04)
+    odds = read_prerace(
         usecols=jkeys + ["odds", "snapshot_dt", "target_offset_min"],
-        dtype={k: str for k in jkeys}, low_memory=False)
-    odds = odds[(odds["race_date"] >= start.isoformat())
-                & (odds["race_date"] <= end.isoformat())]
+        dtype={k: str for k in jkeys},
+        start=start.isoformat(), end=end.isoformat(), data_dir=DATA_DIR)
+    if len(odds) == 0:
+        return empty
     odds["odds"] = pd.to_numeric(odds["odds"], errors="coerce")
     odds = odds[(odds["odds"] > 0) & (odds["bet_type"] != "W")]
     if len(odds) == 0:
@@ -263,12 +262,10 @@ def evaluate_gate_a(end: date) -> dict:
     log["lag"] = pd.to_numeric(log.get("capture_lag_sec"), errors="coerce")
 
     # odds + payouts → wedge (28 日分)
-    odds = pd.read_csv(
-        DATA_DIR / "race_odds_prerace.csv",
+    odds = read_prerace(
         usecols=jkeys + ["odds", "target_offset_min"],
-        dtype={k: str for k in jkeys}, low_memory=False)
-    odds = odds[(odds["race_date"] >= start28.isoformat())
-                & (odds["race_date"] <= end.isoformat())]
+        dtype={k: str for k in jkeys},
+        start=start28.isoformat(), end=end.isoformat(), data_dir=DATA_DIR)
     odds["odds"] = pd.to_numeric(odds["odds"], errors="coerce")
     odds = odds[(odds["odds"] > 0) & odds["bet_type"].isin(GATE_A_BETS)]
     pay = pd.read_csv(DATA_DIR / "payouts.csv", usecols=jkeys + ["payout"],

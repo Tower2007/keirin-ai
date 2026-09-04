@@ -37,6 +37,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import DATA_DIR
+from src.odds_prerace import read_prerace
 
 # 順序型 / 無順序型 (kumi_ban のセパレータ差。join 整合の確認用)
 ORDERED = {"ST2", "WT2", "RT3"}
@@ -53,10 +54,8 @@ def _stdout_utf8() -> None:
 
 
 def load_prerace(start: str | None, end: str | None) -> pd.DataFrame:
-    """race_odds_prerace.csv を読み、(key, offset) 単位で最新 snapshot に dedup。"""
-    path = DATA_DIR / "race_odds_prerace.csv"
-    df = pd.read_csv(
-        path,
+    """race_odds_prerace (月次パーティション) を読み、(key, offset) 単位で最新 snapshot に dedup。"""
+    df = read_prerace(
         usecols=[
             "race_date", "place_code", "race_no", "bet_type", "kumi_ban",
             "odds", "max_odds", "target_offset_min", "snapshot_dt",
@@ -65,12 +64,8 @@ def load_prerace(start: str | None, end: str | None) -> pd.DataFrame:
             "race_date": str, "place_code": str, "race_no": str,
             "bet_type": str, "kumi_ban": str,
         },
-        low_memory=False,
+        start=start, end=end, data_dir=DATA_DIR,
     )
-    if start:
-        df = df[df["race_date"] >= start]
-    if end:
-        df = df[df["race_date"] <= end]
     df = df[pd.to_numeric(df["odds"], errors="coerce") > 0]
     # (key, offset) 単位で snapshot_dt 最新だけ残す (再実行による重複対策)
     df = df.sort_values("snapshot_dt")

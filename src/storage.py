@@ -7,6 +7,7 @@ backfill と ingest_today_lines (cron) の並列実行に備え、書き込み�
 
 import csv
 import logging
+import re
 import sys
 import time
 from contextlib import contextmanager
@@ -166,6 +167,21 @@ CSV_SCHEMAS: dict[str, list[str]] = {
 }
 
 
+# 直前オッズは月次パーティション (2026-09-04)。race_odds_prerace_YYYY-MM.csv は
+# race_odds_prerace.csv と同スキーマ。命名・読み手は src/odds_prerace.py を参照。
+PRERACE_LEGACY_NAME = "race_odds_prerace.csv"
+PRERACE_MONTHLY_RE = re.compile(r"^race_odds_prerace_(\d{4}-\d{2})\.csv$")
+
+
+def schema_for(csv_name: str) -> list[str]:
+    """CSV 名 → カラム定義。月次パーティション名は元スキーマに読み替える。"""
+    if csv_name in CSV_SCHEMAS:
+        return CSV_SCHEMAS[csv_name]
+    if PRERACE_MONTHLY_RE.match(csv_name):
+        return CSV_SCHEMAS[PRERACE_LEGACY_NAME]
+    raise ValueError(f"Unknown CSV: {csv_name}")
+
+
 def _ensure_header(path: Path, columns: list[str]) -> None:
     """ファイルが無い or 空ならヘッダ行を書き込む。"""
     if path.exists() and path.stat().st_size > 0:
@@ -181,10 +197,7 @@ def append_rows(csv_name: str, rows: list[dict]) -> int:
     if not rows:
         return 0
 
-    if csv_name not in CSV_SCHEMAS:
-        raise ValueError(f"Unknown CSV: {csv_name}")
-
-    columns = CSV_SCHEMAS[csv_name]
+    columns = schema_for(csv_name)
     path = DATA_DIR / csv_name
 
     with _file_lock(path):

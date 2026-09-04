@@ -23,6 +23,10 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from src.odds_prerace import read_prerace  # noqa: E402
+
 DATA = Path(os.environ.get("DATA_DIR", r"D:\keirin-ai-data"))
 REPORT_DIR = ROOT / "reports"
 KEY = ["race_date", "place_code", "race_no", "bet_type", "kumi_ban"]
@@ -32,8 +36,7 @@ RNG = np.random.default_rng(42)
 
 
 def load() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    snap = pd.read_csv(DATA / "race_odds_prerace.csv",
-                       dtype={"kumi_ban": str}, low_memory=False)
+    snap = read_prerace(dtype={"kumi_ban": str}, data_dir=DATA)
     pay = pd.read_csv(DATA / "payouts.csv", dtype={"kumi_ban": str}, low_memory=False)
     ev = pd.read_csv(DATA / "ev_prerace_merged.csv", dtype={"kumi_ban": str})
     # snapshot がある期間の payouts だけに絞る

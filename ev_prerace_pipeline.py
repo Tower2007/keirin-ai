@@ -33,6 +33,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import DATA_DIR as DATA
+from src.odds_prerace import load_prerace_dedup as _load_prerace_dedup_partitioned
 
 KEYS = ["race_date", "place_code", "race_no"]
 JOIN_KEYS = KEYS + ["bet_type", "kumi_ban"]
@@ -49,31 +50,21 @@ def _stdout_utf8() -> None:
 
 # ─── オッズ / 払戻ロード (モデル非依存) ──────────────────────────────────
 
-def load_prerace_dedup(start: str | None, end: str | None) -> pd.DataFrame:
+def load_prerace_dedup(start: str | None, end: str | None,
+                       use_cache: bool = True) -> pd.DataFrame:
     """race_odds_prerace を (race,bet,kumi) 単位で最新 snapshot に dedup。
 
     同一 (race,bet,kumi) に 5/3/2/1/0.5 分前の複数 snapshot があるので、
     dedup を怠ると overround が offset 個数倍に膨らむ (報告の "3 倍バグ")。
     最遅 offset (= 最も締切に近い = 約定価格に近い) を残すため snapshot_dt 最新を採用。
+
+    2026-09-04: 読み込みは月次パーティション (race_odds_prerace_YYYY-MM.csv +
+    残っていれば旧単一ファイル) に変更。確定月は dedup 結果を
+    DATA_DIR/cache/odds_prerace_dedup_YYYY-MM.parquet にキャッシュし、当月だけ
+    毎回 dedup する。意味論は不変 (src/odds_prerace.dedup_latest、tests で固定)。
     """
-    df = pd.read_csv(
-        DATA / "race_odds_prerace.csv",
-        usecols=["race_date", "place_code", "race_no", "bet_type",
-                 "kumi_ban", "odds", "snapshot_dt", "target_offset_min"],
-        dtype={"race_date": str, "place_code": str, "race_no": str,
-               "bet_type": str, "kumi_ban": str},
-        low_memory=False,
-    )
-    if start:
-        df = df[df["race_date"] >= start]
-    if end:
-        df = df[df["race_date"] <= end]
-    df["odds"] = pd.to_numeric(df["odds"], errors="coerce")
-    df = df[df["odds"] > 0]
-    n_raw = len(df)
-    df = df.sort_values("snapshot_dt").drop_duplicates(
-        subset=JOIN_KEYS, keep="last"
-    )
+    df, n_raw = _load_prerace_dedup_partitioned(
+        start, end, data_dir=DATA, use_cache=use_cache, verbose=True)
     print(f"  prerace odds: {n_raw:,} → {len(df):,} 行 (dedup後)")
     return df
 
@@ -234,6 +225,10 @@ def main() -> None:
     ap.add_argument("--end", default=None)
     ap.add_argument("--probs", default="ml_pred_probs.csv",
                     help="per-car 確率ファイル (default ml_pred_probs.csv)")
+    ap.add_argument("--no-cache", action="store_true",
+                    help="確定月の dedup キャッシュ (cache/*.parquet) を使わず全て CSV から再計算")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="ev_prerace_merged.csv を書かない (読み込み・健全性チェックのみ)")
     args = ap.parse_args()
 
     print("=" * 70)
@@ -242,7 +237,7 @@ def main() -> None:
     print("=" * 70)
 
     print("\n[1] オッズ / 払戻ロード (dedup)")
-    odds = load_prerace_dedup(args.start, args.end)
+    odds = load_prerace_dedup(args.start, args.end, use_cache=not args.no_cache)
     pay = load_payouts(args.start, args.end)
 
     # ── 健全性チェック 1: overround ──
@@ -311,8 +306,11 @@ def main() -> None:
                   f"EV mean={sub['ev'].mean():.3f}, "
                   f"EV>1 の割合={float((sub['ev']>1).mean())*100:.1f}%")
         out = DATA / "ev_prerace_merged.csv"
-        merged.to_csv(out, index=False)
-        print(f"\n  保存: {out}")
+        if args.dry_run:
+            print(f"\n  [dry-run] 保存スキップ: {out}")
+        else:
+            merged.to_csv(out, index=False)
+            print(f"\n  保存: {out}")
 
     print("\n" + "=" * 70)
     print("※ Phase B は配管検証のみ。EV>1 割合や券種優劣から黒字/採否は判断しない。")

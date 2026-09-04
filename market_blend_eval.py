@@ -43,6 +43,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import DATA_DIR as DATA
+from src.odds_prerace import read_prerace
 
 KEYS = ["race_date", "place_code", "race_no"]
 EPS = 1e-4
@@ -64,15 +65,13 @@ def logit(p):
 
 def load_odds(bet_type: str, offset: float, start: str, end: str) -> pd.DataFrame:
     """prerace odds を券種・offset で絞り、(race,kumi) 最新 snapshot に dedup。"""
-    df = pd.read_csv(
-        DATA / "race_odds_prerace.csv",
+    df = read_prerace(
         usecols=KEYS + ["bet_type", "kumi_ban", "odds", "snapshot_dt",
                         "target_offset_min"],
         dtype={k: str for k in KEYS} | {"bet_type": str, "kumi_ban": str},
-        low_memory=False,
+        start=start, end=end, data_dir=DATA,
     )
-    df = df[(df.bet_type == bet_type)
-            & (df.race_date >= start) & (df.race_date <= end)]
+    df = df[df.bet_type == bet_type]
     df = df[pd.to_numeric(df.target_offset_min, errors="coerce") == offset]
     df["odds"] = pd.to_numeric(df.odds, errors="coerce")
     df = df[df.odds > 0]

@@ -51,9 +51,13 @@ def main() -> None:
     tmp_zip = Path.home() / "AppData" / "Local" / "Temp" / zip_name
     tmp_zip.parent.mkdir(parents=True, exist_ok=True)
 
-    # 対象ファイル一覧 (.lock は除外)
+    # 対象ファイル一覧 (.lock は除外)。
+    # race_odds_prerace.csv.bak-<日時> (月次パーティション移行前の旧単一ファイル、800MB) は
+    # 中身が race_odds_prerace_YYYY-MM.csv と同一なので ZIP には入れない (2026-09-04)。
+    # cache/ (dedup キャッシュ) はサブディレクトリなので元々対象外。
     files = [f for f in data_dir.iterdir()
-             if f.is_file() and f.suffix != ".lock"]
+             if f.is_file() and f.suffix != ".lock"
+             and ".csv.bak-" not in f.name]
     total_size = sum(f.stat().st_size for f in files)
 
     print(f"1/3 ZIP 作成中: {tmp_zip}")
