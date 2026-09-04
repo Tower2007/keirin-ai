@@ -108,15 +108,17 @@ def test_html_gate_a_renders():
     """1004/1011 行を含む経路: gate A マトリクスのセルを実際に評価する。"""
     import weekly_drift_report as wdr
     html = "\n".join(wdr._html_gate_a(_synthetic_gate()))
-    assert "PASS" in html and "FAIL" in html
+    # 2026-08-10 i18n: PASS/FAIL → 合格/不合格 (券種セル) と ✅/❌ (共通条件)
+    assert "合格" in html and "不合格" in html
+    assert "❌" in html  # 合成データは 0.5 分前のみ・共通条件 fail なので ❌ だけ出る
     assert "HTML_TD" not in html
 
 
 def test_md_gate_a_renders_with_lag_null_pct():
-    """markdown 側も lag null% 列込みでレンダリングできる。"""
+    """markdown 側も lag null% 列 (表頭「遅延未計測%」) 込みでレンダリングできる。"""
     import weekly_drift_report as wdr
     md = "\n".join(wdr._md_gate_a(_synthetic_gate()))
-    assert "lag null%" in md
+    assert "遅延未計測%" in md  # 2026-08-10 i18n 後の表頭
     assert "82.0" in md  # fail 週の null 率が表に出る
 
 

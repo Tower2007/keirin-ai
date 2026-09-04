@@ -20,12 +20,27 @@ logger = logging.getLogger(__name__)
 if sys.platform == "win32":
     import msvcrt
 
-    def _acquire(fd: int) -> None:
+    LOCK_TIMEOUT_SEC = 120.0
+
+    def _acquire(fd: int, timeout: float = LOCK_TIMEOUT_SEC) -> None:
+        """排他ロック取得。timeout 秒を超えたら諦めて例外を投げる.
+
+        以前は無限リトライで、相手プロセスがロックを握ったまま固まると
+        こちらも永久に待ち続けた (無音のハング)。上限を設け、超過時は
+        logger.error に残して TimeoutError を上げる (2026-09-04)。
+        """
+        deadline = time.monotonic() + timeout
         while True:
             try:
                 msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
                 return
-            except OSError:
+            except OSError as e:
+                if time.monotonic() >= deadline:
+                    logger.error(
+                        "CSV lock acquire timed out after %.0fs (fd=%d): %s",
+                        timeout, fd, e)
+                    raise TimeoutError(
+                        f"CSV lock acquire timed out after {timeout:.0f}s") from e
                 time.sleep(0.1)
 
     def _release(fd: int) -> None:

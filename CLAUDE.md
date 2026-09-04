@@ -33,7 +33,7 @@ Google Drive Stream を使うと事故る** (Drive の "Free up space" が
 
 推奨運用:
 - **本番 DATA_DIR はローカル SSD/HDD** (例: `D:\keirin-ai-data`)
-- **Drive は完成 ZIP の保管庫** (`scripts/backup_to_drive.ps1` 経由)
+- **Drive は完成 ZIP の保管庫** (`scripts/backup_to_drive.py` 経由、cron は `scripts/cron_backup_drive.bat`)
 - **別 PC への引き渡しは ZIP 経由** (ブラウザ DL → ローカル展開)
 
 ## ディレクトリ構成
@@ -61,6 +61,8 @@ ingest_day.py は **差分取り込み** に対応しているため、同じ ve
 | 翌朝 5:00 (cron) | `ingest_day.py YESTERDAY VENUE` を全場ループ | results/payouts のみ追加 |
 | 月曜 7:30 (cron) | `weekly_drift_report.py --mail` | 過去 7 日蓄積状況 + drift を Gmail 通知 (サイレント障害早期検知) |
 | 月曜 3:00 (cron) | `scripts/backup_to_drive.py --keep 3` | D: ドライブ全データを ZIP 化 → Google Drive へ転送 (最新 3 世代保持) |
+| 月曜 6:00 (cron `keirin-ai-weekly-retrain`) | `scripts/cron_weekly_retrain.bat` (build_race_quality → build_race_completion → `weekly_retrain.py`) | 週次 ML 再学習 + 採用品質ゲート (ROI 劣化拒否権つき) |
+| 毎日 7:30 (cron `keirin-ai-shadow-predict`) | `daily_shadow_predict.py` | 当日レースのシャドー予測を追記 (pythonw 起動、発走時刻ガードあり) |
 
 ### pre-start odds snapshot 設計 (Phase 6, 2026-05-12 〜)
 - 朝 8:00 に 1 度 `pythonw.exe` (コンソール非表示) でデーモン起動

@@ -31,6 +31,7 @@ import csv
 import os
 import subprocess
 import sys
+import traceback
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -38,7 +39,14 @@ from statistics import mean, stdev
 
 from src.config import DATA_DIR
 
-sys.stdout.reconfigure(encoding="utf-8")
+if sys.stdout is not None:
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        # pythonw 起動 (Task Scheduler) では sys.stdout=None / reconfigure 不可の
+        # ことがあり、素の reconfigure は AttributeError で無音死する
+        # (ml_baseline.py と同型のガード、2026-09-04)
+        pass
 
 REPORT_PATH = DATA_DIR / "weekly_drift_report.md"
 
@@ -1217,7 +1225,11 @@ def _send_mail_report(report: str, out_path: Path,
         to_addr = os.environ.get("NOTIFY_TO", "(NOTIFY_TO 未設定)")
         print(f"[mail] sent to {to_addr}")
     except Exception as e:
+        # 送信失敗を rc=0 で終えるとタスクスケジューラ/統合監視が成功と誤認する
+        # (「動くが届かない」)。スタックトレースをログに残して非零終了 (2026-09-04)
         print(f"⚠️ メール送信失敗: {e}", file=sys.stderr)
+        traceback.print_exc()
+        sys.exit(1)
 
 
 def main() -> None:
