@@ -166,13 +166,16 @@ def _ingest_results_and_payouts(client: KeirinClient, place_code: int,
                                 index: RaceDayIndex | None,
                                 counts: dict[str, int],
                                 existing_res_rows: set | None = None,
-                                payout_gap: set | None = None) -> None:
+                                payout_gap: set | None = None,
+                                existing_pay_rows: set | None = None) -> None:
     """結果 + 払戻 (JSJ012) をレース完了分のみ per-race で取得して追記。
 
     existing_res_rows / payout_gap が渡された場合 (per-race 自己治癒モード):
       - results 行が既にあるレースは results を追記しない (重複防止)
       - payout_gap のレースは payouts のみ追記
       - 両方揃っているレースは fetch もしない
+      - existing_pay_rows (payouts 行が既にあるレース) は payouts を追記しない (2026-09-30:
+        results だけ欠けたレース (9/24 玉野 R4 / 川崎 R4) を治癒すると payouts が二重になっていた)
     """
     finished_races = [r for r in races if r.get("race_end")]
     if not finished_races:
@@ -200,6 +203,7 @@ def _ingest_results_and_payouts(client: KeirinClient, place_code: int,
         if not r_enc:
             continue
         skip_results = heal_mode and str(r_no) in existing_res_rows
+        skip_payouts = heal_mode and existing_pay_rows is not None and str(r_no) in existing_pay_rows
         try:
             jsj012 = client.get_race_result(r_enc)
             if jsj012.get("resultCd") == 0:
@@ -209,8 +213,9 @@ def _ingest_results_and_payouts(client: KeirinClient, place_code: int,
                     n_res = append_rows("race_results.csv", results)
                     counts["results"] = counts.get("results", 0) + n_res
                     results_added += n_res
-                counts["payouts"] = counts.get("payouts", 0) + append_rows(
-                    "payouts.csv", payouts)
+                if not skip_payouts:
+                    counts["payouts"] = counts.get("payouts", 0) + append_rows(
+                        "payouts.csv", payouts)
         except Exception as e:
             logger.error("  JSJ012 R%d failed: %s", r_no, e)
     if index is not None and results_added > 0:
@@ -249,9 +254,11 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str,
     # ここでは payout_gap だけで fast-path を解除する (results_gap は後段で処理)。
     existing_res_rows: set | None = None
     payout_gap: set | None = None
+    existing_pay_rows: set | None = None
     heal_mode = index is None and has_results and is_past
     if heal_mode:
-        existing_res_rows, payout_gap = compute_result_gaps(place_code, race_date)
+        existing_res_rows, settled, existing_pay_rows = _per_race_state(place_code, race_date)
+        payout_gap = settled - existing_pay_rows
     if (has_meta and has_entries and lines_ok and has_stats and has_results
             and not heal_mode):
         logger.info("Already complete: %s place=%d, skipping", race_date, place_code)
@@ -322,7 +329,8 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str,
         _ingest_results_and_payouts(client, place_code, race_date,
                                     program["races"], index, counts,
                                     existing_res_rows=existing_res_rows,
-                                    payout_gap=payout_gap)
+                                    payout_gap=payout_gap,
+                                    existing_pay_rows=existing_pay_rows)
 
     logger.info("=== Done: %s %s ===", race_date, venue)
     for name, count in sorted(counts.items()):
