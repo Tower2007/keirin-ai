@@ -96,8 +96,13 @@ def _ingest_entries_and_lines(client: KeirinClient, place_code: int,
         if index is not None and lines:
             index.mark("race_lines.csv", place_code, race_date)
         if not lines:
-            logger.warning("  Lines empty (race already finished?): %s %d",
-                           race_date, place_code)
+            # 診断文を実態に合わせる (2026-11-12): 朝 7:00 の当日取得でも並び (nInfo) が
+            # 未掲載の場がある (開催日程・ナイター等で毎日 2 場前後)。「終了済み」とは限らない。
+            if race_date < _date.today().isoformat():
+                why = "過去日のため並び取得不能 (想定内)"
+            else:
+                why = "当日だが並び (nInfo) 未掲載 — 場の掲載遅れか終了済み。この venue-day の race_lines は欠測"
+            logger.warning("  Lines empty: %s %d — %s", race_date, place_code, why)
 
 
 def _ingest_stats(client: KeirinClient, place_code: int, race_date: str,
@@ -203,7 +208,9 @@ def _ingest_results_and_payouts(client: KeirinClient, place_code: int,
         if not r_enc:
             continue
         skip_results = heal_mode and str(r_no) in existing_res_rows
-        skip_payouts = heal_mode and existing_pay_rows is not None and str(r_no) in existing_pay_rows
+        # 払戻が既にあるレースは heal の有無に関わらず二重追記しない (2026-11-12:
+        # 7/11 の遡り取得で 2025-01-21 場74 等 10 レース 140 行が二重化した型の再発防止)
+        skip_payouts = existing_pay_rows is not None and str(r_no) in existing_pay_rows
         try:
             jsj012 = client.get_race_result(r_enc)
             if jsj012.get("resultCd") == 0:
@@ -259,6 +266,9 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str,
     if heal_mode:
         existing_res_rows, settled, existing_pay_rows = _per_race_state(place_code, race_date)
         payout_gap = settled - existing_pay_rows
+    elif index is None and is_past:
+        # results が無い venue-day の遡り取得: 払戻だけ先にある場合に二重追記しない
+        _, _, existing_pay_rows = _per_race_state(place_code, race_date)
     if (has_meta and has_entries and lines_ok and has_stats and has_results
             and not heal_mode):
         logger.info("Already complete: %s place=%d, skipping", race_date, place_code)

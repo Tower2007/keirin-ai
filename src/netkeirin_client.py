@@ -52,6 +52,9 @@ class NetkeirinClient:
             "+https://github.com/Tower2007/keirin-ai)",
         )
         self._session = self._build_session()
+        # 直近レスポンスの HTTP Date ヘッダ (サーバ時計)。発走前オッズ API は official_dt を
+        # 返さないため、取得時刻の独立な手掛かりとして timing ログに残す (2026-11-12)
+        self.last_response_date = ""
 
     def _build_session(self) -> requests.Session:
         s = requests.Session()
@@ -93,6 +96,7 @@ class NetkeirinClient:
         resp = self._session.post(
             NETKEIRIN_API, data=data, headers=headers, timeout=30,
         )
+        self.last_response_date = resp.headers.get("Date", "") or ""
         if resp.status_code != 200:
             raise NetkeirinAPIError(
                 f"{NETKEIRIN_API} returned {resp.status_code}: {resp.text[:200]}"

@@ -73,7 +73,10 @@ def get_date_range(args) -> tuple[date, date]:
     if args.since:
         start = date.fromisoformat(args.since)
     else:
-        start = today - timedelta(days=args.days - 1)
+        # 月曜 07:30 実行では「今日」は進行中で判定対象外になる。次回は火曜始まりだと
+        # 月曜が永久に未評価になるため、範囲を 1 日前に伸ばして前回の月曜を含める
+        # (2026-11-12 監査)。前回の進行中日が今回で確定判定される。
+        start = today - timedelta(days=args.days)
     return start, today
 
 
@@ -176,6 +179,8 @@ OVERALL_CRITERIA = [
     "🟢OK (正常): 上記いずれにも該当しない",
     "※ 当日 (🟡 本日・進行中) は結果が未確定のため判定対象外。"
     "「正常 n/m日」の分母 m も確定した日数のみを数える",
+    "※ 凍結ゲートA/B (取得時点・戦略の固定可否) は総合状態に含めない。データ収集の健全性とは"
+    "別の「次の段階へ進めるか」の指標で、件名の「ゲートA n/20」で別掲する",
 ]
 
 
@@ -374,6 +379,17 @@ def evaluate_gate_a(end: date) -> dict:
     return out
 
 
+def gate_a_pass_count(gate: dict) -> tuple[int, int]:
+    """ゲートA の合格数 (取得時点 × 券種の組)。戻り値 (合格数, 全組数)。"""
+    n_pass = n_all = 0
+    for data in gate.get("offsets", {}).values():
+        for bt in GATE_A_BETS:
+            n_all += 1
+            if data["bet_verdicts"].get(bt):
+                n_pass += 1
+    return n_pass, n_all
+
+
 def count_unique_ok_races(log_rows: list[dict]) -> int:
     """ok snapshot が 1 つ以上あるユニークレース数 (gate 判定用、監査 P1-1)。
 
@@ -435,13 +451,19 @@ def summarize_actual_offset(log_rows: list[dict]) -> dict[float, dict[str, float
 
     狙いと実測のズレを定量化 (auto の LEAD_MIN 短縮判断の根拠データ)。
     """
-    by_offset: dict[float, list[int]] = defaultdict(list)
+    by_offset: dict[float, list[float]] = defaultdict(list)
     for r in log_rows:
         if r.get("status") != "ok":
             continue
         try:
             off = _parse_offset(r["target_offset_min"])
-            actual = int(r["minutes_before_start"])
+            # minutes_before_start は int(round()) で、5/3/2/1 分前は常に狙い通り (標準偏差 0)
+            # に見えて何も検知できない (2026-11-12 監査)。秒精度の seconds_before_start を優先する。
+            sbs = r.get("seconds_before_start")
+            if sbs not in (None, ""):
+                actual = float(sbs) / 60.0
+            else:
+                actual = float(int(r["minutes_before_start"]))
         except (ValueError, KeyError, TypeError):
             continue
         by_offset[off].append(actual)
@@ -454,6 +476,30 @@ def summarize_actual_offset(log_rows: list[dict]) -> dict[float, dict[str, float
         s = stdev(vals) if len(vals) > 1 else 0.0
         out[off] = {"n": len(vals), "mean": m, "std": s}
     return out
+
+
+# 日次被覆率の閾値 (2026-11-12)。旧実装は「1 行でもあれば ✅」で、lines 76% / オッズ半分
+# だけの日も正常に見えた。毎日 2 場前後は並びが未掲載で lines 75〜80% が常態のため、
+# 大幅欠落 (lines < 50%、オッズ < 80%) だけ ⚠️ にし、軽い欠落は ✅ のまま注記する。
+LINES_WARN_RATIO = 0.50
+SNAP_WARN_RATIO = 0.80
+SNAP_PER_RACE = 5  # 既定 lead_mins (5,3,2,1,0.5) の個数
+
+
+def _coverage_status(n_entries: int, n_lines: int, snaps_ok: int, n_races: int) -> str:
+    """lines / オッズの被覆率から日次状態の文字列を返す (純関数)。"""
+    lines_ratio = (n_lines / n_entries) if n_entries else 1.0
+    snap_ratio = (snaps_ok / (n_races * SNAP_PER_RACE)) if n_races else 1.0
+    if lines_ratio < LINES_WARN_RATIO:
+        return f"⚠️ ライン一部欠落 ({lines_ratio:.0%})"
+    if snap_ratio < SNAP_WARN_RATIO:
+        return f"⚠️ オッズ一部欠落 ({snap_ratio:.0%})"
+    notes = []
+    if lines_ratio < 0.95:
+        notes.append(f"ライン {lines_ratio:.0%}")
+    if snap_ratio < 0.95:
+        notes.append(f"オッズ {snap_ratio:.0%}")
+    return "✅ 正常" + (f" ({' / '.join(notes)})" if notes else "")
 
 
 def get_daily_ingestion_health(start: date, end: date) -> list[dict]:
@@ -474,6 +520,7 @@ def get_daily_ingestion_health(start: date, end: date) -> list[dict]:
     counts: dict[str, dict[str, int]] = defaultdict(
         lambda: {k: 0 for k, _ in csv_keys}
     )
+    race_sets: dict[str, set] = defaultdict(set)  # 日別のユニークレース (被覆率の分母)
 
     # 各 CSV を date 列で集計 (重い race_odds_prerace.csv は除外)
     for label, fname in csv_keys:
@@ -493,6 +540,8 @@ def get_daily_ingestion_health(start: date, end: date) -> list[dict]:
                         continue
                     if start <= d <= end:
                         counts[rd][label] += 1
+                        if label == "entries":
+                            race_sets[rd].add((r.get("place_code"), r.get("race_no")))
         except Exception:
             pass  # 読めなくても他の集計は続ける
 
@@ -532,7 +581,8 @@ def get_daily_ingestion_health(start: date, end: date) -> list[dict]:
         elif snaps == 0:
             status = "⚠️ オッズ未取得"
         else:
-            status = "✅ 正常"
+            status = _coverage_status(c["entries"], c["lines"], snaps,
+                                      len(race_sets.get(ds, ())))
         rows.append({
             "date": ds,
             "venues": c["venues"],
@@ -607,7 +657,8 @@ def _md_daily_health(start: date, end: date) -> list[str]:
     L.append("")
     L.append("**状態の凡例**: ✅ 正常 / 🟡 本日 (進行中) / "
              "⚠️ ライン欠落 (並びの取り逃し) / "
-             "⚠️ 着順欠落 / ⚠️ オッズ未取得 / ❌ データなし")
+             "⚠️ 着順欠落 / ⚠️ オッズ未取得 / ❌ データなし / "
+             "⚠️ ライン・オッズ一部欠落 (被覆率 ライン<50% / オッズ<80%)")
     L.append("")
     return L
 
@@ -658,6 +709,34 @@ def _md_coverage(log_rows: list[dict]) -> list[str]:
     return L
 
 
+def summarize_done_timing(start: date, end: date) -> dict:
+    """prerace_capture_timing.csv (fetch 完了基準) を offset 別に集計。無ければ {}。
+
+    done_lag_sec = fetch 完了時刻 - 予定時刻 (HTTP 所要・リトライ待ちを含む)。
+    seconds_before_done = fetch 完了時点の発走までの残り (負 = 発走後に取得完了)。
+    """
+    path = DATA_DIR / "prerace_capture_timing.csv"
+    if not path.exists():
+        return {}
+    import pandas as pd
+    t = pd.read_csv(path, dtype={"race_date": str}, low_memory=False)
+    t = t[(t["race_date"] >= start.isoformat()) & (t["race_date"] <= end.isoformat())
+          & (t["status"] == "ok")]
+    out = {}
+    for off, g in t.groupby("target_offset_min"):
+        lag = pd.to_numeric(g["done_lag_sec"], errors="coerce").dropna()
+        fs = pd.to_numeric(g["fetch_sec"], errors="coerce").dropna()
+        sb = pd.to_numeric(g["seconds_before_done"], errors="coerce").dropna()
+        if len(lag) == 0:
+            continue
+        out[_parse_offset(off)] = {
+            "n": int(len(lag)), "done_lag_p95": float(lag.abs().quantile(0.95)),
+            "done_lag_max": float(lag.max()), "fetch_p95": float(fs.quantile(0.95)) if len(fs) else float("nan"),
+            "after_start": int((sb < 0).sum()),
+        }
+    return out
+
+
 def _md_timing(log_rows: list[dict]) -> list[str]:
     """セクション 2: 取得タイミング精度。"""
     L: list[str] = []
@@ -672,6 +751,21 @@ def _md_timing(log_rows: list[dict]) -> list[str]:
         for off in sorted(timing.keys(), reverse=True):
             t = timing[off]
             L.append(f"| {off} | {t['n']} | {t['mean']:.2f} | {t['std']:.2f} |")
+        L.append("")
+        L.append("実測は発走までの秒数 (取得直前に測定) から換算。旧版は整数分に丸めており常に 0 になっていた。")
+    L.append("")
+    done = summarize_done_timing(date.today() - timedelta(days=7), date.today())
+    L.append("取得完了基準の遅延 (prerace_capture_timing.csv。fetch 完了時刻 - 予定時刻):")
+    L.append("")
+    if not done:
+        L.append("(未蓄積。daemon を新コードで起動した日から記録される)")
+    else:
+        L.append("| 狙い (分前) | 件数 | 完了遅延 p95 (秒) | 完了遅延 最大 (秒) | 所要 p95 (秒) | 完了が発走後 |")
+        L.append("|---:|---:|---:|---:|---:|---:|")
+        for off in sorted(done, reverse=True):
+            d = done[off]
+            L.append(f"| {off} | {d['n']} | {d['done_lag_p95']:.1f} | {d['done_lag_max']:.1f} | "
+                     f"{d['fetch_p95']:.1f} | {d['after_start']} |")
     L.append("")
     return L
 
@@ -835,6 +929,10 @@ def render_report(start: date, end: date,
              f"取得漏れ {overall['n_missing']}件 / "
              f"進行中 {overall['n_inprogress']}日は判定対象外)")
     L.append("")
+    ga_pass, ga_all = gate_a_pass_count(gate)
+    L.append(f"**ゲートA: {ga_pass}/{ga_all or 20} 合格** (取得時点×券種。総合状態には含めない別指標。"
+             "詳細は §8、ゲートB・shadow 前向き評価は §10)")
+    L.append("")
     L.append(f"生成時刻: {datetime.now().isoformat(timespec='seconds')}")
     L.append("")
     L.append("発走前オッズの取得状況と、取得時点ごとの価格のズレを監視する。")
@@ -848,6 +946,7 @@ def render_report(start: date, end: date,
     L.extend(_md_completion(missing))
     L.extend(_md_gate_a(gate))
     L.extend(_md_actions(log_rows, health))
+    L.extend(_extra_md(gate))
     return "\n".join(L)
 
 
@@ -887,7 +986,7 @@ def td(content, extra: str = "", right: bool = False) -> str:
 
 
 def _html_header(start: date, end: date, daily: list[dict],
-                 n_snap_total: int, overall: dict) -> list[str]:
+                 n_snap_total: int, overall: dict, gate: dict | None = None) -> list[str]:
     """div 開始 + タイトル h2 + サマリ行。
 
     状態バッジは compute_overall_status の結果のみを使う (件名と同一の変数)。
@@ -912,6 +1011,10 @@ def _html_header(start: date, end: date, daily: list[dict],
         f'進行中 <b>{overall["n_inprogress"]}</b>日 (判定対象外) &nbsp;|&nbsp; '
         f'オッズ取得 累計 <b>{n_snap_total:,}</b> 件</p>'
     )
+    if gate is not None:
+        ga_pass, ga_all = gate_a_pass_count(gate)
+        p.append(f'<p style="margin:0 0 12px 0; color:#555;"><b>ゲートA: {ga_pass}/{ga_all or 20} 合格</b> '
+                 f'(総合状態には含めない別指標。詳細は 8 / 10)</p>')
     return p
 
 
@@ -955,7 +1058,8 @@ def _html_daily_health(daily: list[dict]) -> list[str]:
     p.append('<p style="color:#666; font-size:12px; margin:4px 0 0 0;">'
              '✅ 正常 / 🟡 本日 (進行中) / '
              '⚠️ ライン欠落 (並びの取り逃し) / '
-             '⚠️ 着順欠落 / ⚠️ オッズ未取得 / ❌ データなし</p>')
+             '⚠️ 着順欠落 / ⚠️ オッズ未取得 / ❌ データなし / '
+             '⚠️ ライン・オッズ一部欠落 (被覆率 ライン&lt;50% / オッズ&lt;80%)</p>')
     return p
 
 
@@ -1035,6 +1139,15 @@ def _html_timing(timing: dict[float, dict[str, float]]) -> list[str]:
                 f'<td {HTML_TD_R}>{t["std"]:.2f}</td></tr>'
             )
         p.append('</table>')
+    done = summarize_done_timing(date.today() - timedelta(days=7), date.today())
+    if done:
+        p.append('<p style="color:#666; font-size:12px; margin:4px 0;">取得完了基準の遅延 (秒): '
+                 + " / ".join(f'{off}分前 p95={d["done_lag_p95"]:.1f}・最大={d["done_lag_max"]:.1f}'
+                              f'・発走後完了={d["after_start"]}' for off, d in sorted(done.items(), reverse=True))
+                 + '</p>')
+    else:
+        p.append('<p style="color:#999; font-size:12px; margin:4px 0;">取得完了基準の遅延: 未蓄積 '
+                 '(daemon 新コード起動日から記録)</p>')
     return p
 
 
@@ -1171,7 +1284,7 @@ def render_report_html(start: date, end: date,
     overall = compute_overall_status(daily, missing)
 
     p: list[str] = []
-    p.extend(_html_header(start, end, daily, n_snap_total, overall))
+    p.extend(_html_header(start, end, daily, n_snap_total, overall, gate))
     p.extend(_html_daily_health(daily))
     p.extend(_html_cron_health(cron_status))
     p.extend(_html_coverage(cov))
@@ -1179,7 +1292,80 @@ def render_report_html(start: date, end: date,
     p.extend(_html_drift_health(health, missing))
     p.extend(_html_gate_a(gate))
     p.extend(_html_actions(n_races, health))
+    p.extend(_extra_html(gate))
     return "\n".join(p)
+
+
+_EXTRA_MEMO: list = []  # [(gate オブジェクト, 結果)] md と html で同じ重い評価を 2 回しない
+
+
+def _extra_data(gate: dict) -> dict:
+    """shadow 評価 / 欠測台帳 / 台帳整合 / 再学習履歴。各部は独立に try し、失敗は本文に出す。"""
+    if _EXTRA_MEMO and _EXTRA_MEMO[0][0] is gate:
+        return _EXTRA_MEMO[0][1]
+    out: dict = {}
+    try:
+        import shadow_eval
+        out["shadow"] = (shadow_eval.evaluate(DATA_DIR, gate), "")
+    except Exception as e:
+        out["shadow"] = (None, f"{type(e).__name__}: {e}")
+    try:
+        from src.gaps import load_gaps
+        cut = (date.today() - timedelta(days=60)).isoformat()
+        out["gaps"] = [g for g in load_gaps() if g["race_date"] >= cut]
+    except Exception:
+        out["gaps"] = []
+    try:
+        import ledger_check
+        out["ledger"] = ledger_check.check_all(DATA_DIR)
+    except Exception as e:
+        out["ledger"] = {"error": f"{type(e).__name__}: {e}"}
+    _EXTRA_MEMO[:] = [(gate, out)]
+    return out
+
+
+def _extra_md(gate: dict) -> list[str]:
+    ex = _extra_data(gate)
+    import shadow_eval
+    L = shadow_eval.md_lines(*ex["shadow"])
+    L.append("## 11. 台帳の整合と記録された欠測")
+    L.append("")
+    led = ex["ledger"]
+    if "error" in led:
+        L.append(f"⚠️ 台帳検査に失敗: {led['error']}")
+    else:
+        mark = "✅" if led["payouts_dup_keys"] == 0 and led["shadow_official_dup_keys"] == 0 else "⚠️"
+        L.append(f"- {mark} キー重複: payouts.csv {led['payouts_dup_keys']} 組 / "
+                 f"shadow official {led['shadow_official_dup_keys']} 組 (0 が正常)")
+    if ex["gaps"]:
+        L.append("- 事後に取れない欠測 (直近 60 日、data_gaps.csv):")
+        for g in ex["gaps"]:
+            L.append(f"  - {g['race_date']} {g['kind']} {g['place_code']}: {g['note']}")
+    else:
+        L.append("- 記録された欠測 (直近 60 日): なし")
+    L.append("")
+    return L
+
+
+def _extra_html(gate: dict) -> list[str]:
+    ex = _extra_data(gate)
+    import shadow_eval
+    p = shadow_eval.html_lines(ex["shadow"][0], ex["shadow"][1], HTML_TBL, HTML_TH, HTML_TH_R, td)
+    p.append('<h3 style="color:#444; margin:18px 0 8px 0;">11. 台帳の整合と記録された欠測</h3>')
+    led = ex["ledger"]
+    if "error" in led:
+        p.append(f'<p style="color:#d32f2f;">⚠️ 台帳検査に失敗: {led["error"]}</p>')
+    else:
+        ok = led["payouts_dup_keys"] == 0 and led["shadow_official_dup_keys"] == 0
+        p.append(f'<p>{"✅" if ok else "⚠️"} キー重複: payouts.csv <b>{led["payouts_dup_keys"]}</b> 組 / '
+                 f'shadow official <b>{led["shadow_official_dup_keys"]}</b> 組 (0 が正常)</p>')
+    if ex["gaps"]:
+        p.append('<p style="margin:4px 0;">事後に取れない欠測 (直近 60 日):</p><ul style="margin:0;">'
+                 + "".join(f'<li>{g["race_date"]} {g["kind"]} {g["place_code"]}: {g["note"]}</li>'
+                           for g in ex["gaps"]) + '</ul>')
+    else:
+        p.append('<p style="color:#666;">記録された欠測 (直近 60 日): なし</p>')
+    return p
 
 
 def _send_mail_report(report: str, out_path: Path,
@@ -1207,6 +1393,8 @@ def _send_mail_report(report: str, out_path: Path,
               f"/ races {n_races}")
     if overall["n_missing"]:
         detail += f" / 取得漏れ{overall['n_missing']}"
+    ga_pass, ga_all = gate_a_pass_count(gate)
+    detail += f" / ゲートA {ga_pass}/{ga_all or 20}"
     subject = (f"[keirin] 🚴 週次 {sent_date} "
                f"{overall['mark']}{overall['label']} ({detail})")
     # HTML 版を生成 (Gmail で見栄え良い表に)

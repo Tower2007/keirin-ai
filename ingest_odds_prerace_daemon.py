@@ -81,6 +81,11 @@ LEAD_MINS_DEFAULT = "5,3,2,1,0.5"  # float 可 (0.5 = 30 秒前)
 ENTRIES_RETRY_MAX = 10           # entries 未準備時の retry 回数
 ENTRIES_RETRY_INTERVAL = 300     # entries retry 待機 (秒) = 5 分
 MISS_TOLERANCE_MIN = 2           # snapshot_at がこの分数以上前なら乗り遅れ扱い
+RETRY_BEFORE_START_SEC = 10      # fail 後の再試行は発走の何秒前まで許すか (2026-11-12)
+RETRY_WAIT_SEC = 3               # fail 後の再試行までの待機 (秒)
+REFRESH_INTERVAL_SEC = 600       # 同一場の発走時刻を再確認する間隔 (2026-11-12)
+REFRESH_MIN_IDLE_SEC = 45        # 次の取得までこれ以上空くときだけ 1 場ぶん更新する
+TIMING_LOG_NAME = "prerace_capture_timing.csv"
 
 
 def _fmt_off(off: float) -> int | float:
@@ -201,21 +206,27 @@ def capture_race(
     snapshot_iso = snapshot_dt.strftime("%Y-%m-%d %H:%M:%S")
     off_disp = _fmt_off(target_offset_min)
 
+    fetch_start = datetime.now()
     try:
         odds_data = client.get_odds(race_id)
     except Exception as e:
         logger.error("  R%d off=%s (%s) FETCH ERROR: %s",
                      race_no, off_disp, race_id, e)
-        return {"status": "fail", "n_rows": 0, "note": f"fetch_error: {e}"[:200]}
+        return {"status": "fail", "n_rows": 0, "note": f"fetch_error: {e}"[:200],
+                "fetch_start": fetch_start, "fetch_end": datetime.now(),
+                "server_date": getattr(client, "last_response_date", "")}
+    fetch_end = datetime.now()
+    timing = {"fetch_start": fetch_start, "fetch_end": fetch_end,
+              "server_date": getattr(client, "last_response_date", "")}
 
     if odds_data is None:
         logger.info("  R%d off=%s (%s) NG (no odds)",
                     race_no, off_disp, race_id)
-        return {"status": "no_odds", "n_rows": 0, "note": "netkeirin_NG"}
+        return {"status": "no_odds", "n_rows": 0, "note": "netkeirin_NG", **timing}
 
     rows = parse_odds_lists(place_code, race_date, race_no, odds_data)
     if not rows:
-        return {"status": "no_odds", "n_rows": 0, "note": "empty_rows"}
+        return {"status": "no_odds", "n_rows": 0, "note": "empty_rows", **timing}
 
     for r in rows:
         r["snapshot_dt"] = snapshot_iso
@@ -231,7 +242,105 @@ def capture_race(
         race_no, off_disp, n, minutes_before,
         odds_data.get("official_dt", ""),
     )
-    return {"status": "ok", "n_rows": n, "note": ""}
+    return {"status": "ok", "n_rows": n, "note": "", **timing}
+
+
+def timing_row(race: dict, target_offset: float, snapshot_at: datetime,
+               result: dict, st_dt: datetime) -> dict | None:
+    """取得完了基準の遅延記録 1 行 (prerace_capture_timing.csv)。
+
+    既存 capture_lag_sec は「sleep 明けの時刻 - 予定」で、HTTP 所要・リトライ待ちを含まない
+    (2026-11-12 監査: p95 が常に 0.0 で遅い取得を検知できなかった)。ここでは fetch 完了時刻を
+    基準にした done_lag_sec と、発走までの残り seconds_before_done を記録する。
+    official_dt は発走前の API が返さず 5 月から一貫して空のため、HTTP の Date ヘッダ
+    (サーバ時計) を server_date に残して独立な時刻の手掛かりにする。
+    """
+    fs, fe = result.get("fetch_start"), result.get("fetch_end")
+    if fs is None or fe is None:
+        return None
+    return {
+        "race_date": race["race_date"], "place_code": race["place_code"],
+        "race_no": race["race_no"], "target_offset_min": _fmt_off(target_offset),
+        "status": result["status"],
+        "scheduled_snapshot_dt": snapshot_at.strftime("%Y-%m-%d %H:%M:%S"),
+        "fetch_start_dt": fs.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+        "fetch_end_dt": fe.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+        "fetch_sec": round((fe - fs).total_seconds(), 2),
+        "done_lag_sec": round((fe - snapshot_at).total_seconds(), 2),
+        "seconds_before_done": round((st_dt - fe).total_seconds(), 1),
+        "server_date": result.get("server_date", ""),
+    }
+
+
+def apply_program_update(pending: list, place_code: str, race_date: str,
+                         rinfo: list) -> dict:
+    """出走表 (PJ0305 rInfo) の最新値で、その場の未取得スケジュールを更新する。
+
+    pending: [{"race": {...}, "st_dt": datetime, "snapshot_at": datetime, "offset": float}]
+    - 発走時刻 (stTime) が変わったレース -> st_dt / snapshot_at を再計算 (繰上げ・繰下げ)
+    - 結果が既に出ている (resultFlg) / rInfo から消えた (中止・番組変更) -> 未取得分を破棄
+    戻り値: {"moved": n, "dropped": n}。pending は破壊的に更新する。
+    """
+    info = {str(r.get("raceNo")): r for r in rinfo or []}
+    moved = dropped = 0
+    keep = []
+    for it in pending:
+        race = it["race"]
+        if race["place_code"] != place_code or race["race_date"] != race_date:
+            keep.append(it)
+            continue
+        r = info.get(str(race["race_no"]))
+        if r is None or r.get("resultFlg"):
+            dropped += 1
+            continue
+        new_st = str(r.get("stTime") or "").strip()
+        new_dt = parse_st_time(race_date, new_st) if new_st else None
+        if new_dt is not None and new_dt != it["st_dt"]:
+            it["st_dt"] = new_dt
+            it["snapshot_at"] = new_dt - timedelta(minutes=it["offset"])
+            race["st_time"] = new_st
+            moved += 1
+        keep.append(it)
+    pending[:] = keep
+    return {"moved": moved, "dropped": dropped}
+
+
+def refresh_one_venue(client_keirin, pending: list, last_refresh: dict,
+                      enc_cache: dict, now: datetime) -> str | None:
+    """最も古く確認した場を 1 つだけ更新する。更新した場コードを返す (対象なしは None)。
+
+    例外はすべて握ってログのみ (更新に失敗しても元のスケジュールで取得を続ける)。
+    """
+    venues = sorted({(it["race"]["race_date"], it["race"]["place_code"]) for it in pending})
+    due = [v for v in venues
+           if (now - last_refresh.get(v, datetime.min)).total_seconds() >= REFRESH_INTERVAL_SEC]
+    if not due:
+        return None
+    v = min(due, key=lambda x: last_refresh.get(x, datetime.min))
+    last_refresh[v] = now
+    rd, pc = v
+    try:
+        from src.parser import extract_json_data, parse_program_meta
+        enc = enc_cache.get(v)
+        if enc is None:
+            pc0201 = extract_json_data(client_keirin.get_raceprogram_html(int(pc), rd), "PC0201")
+            if not pc0201 or not pc0201.get("C0201data"):
+                return pc
+            races = parse_program_meta(int(pc), rd, pc0201)["races"]
+            if not races:
+                return pc
+            enc = races[0]["enc_para_r"]
+            enc_cache[v] = enc
+        pj0305 = extract_json_data(client_keirin.get_racelist_html(enc), "PJ0305")
+        if not pj0305:
+            return pc
+        res = apply_program_update(pending, pc, rd, pj0305.get("rInfo", []))
+        if res["moved"] or res["dropped"]:
+            logger.info("Program refresh pc=%s: 発走時刻変更 %d 件 / 破棄 (終了・中止) %d 件",
+                        pc, res["moved"], res["dropped"])
+    except Exception as e:
+        logger.warning("Program refresh pc=%s failed (元のスケジュールで継続): %s", pc, e)
+    return pc
 
 
 def main() -> None:
@@ -321,11 +430,32 @@ def main() -> None:
         logger.info("  ... (+%d more)", len(fresh_schedule) - 5)
 
     client = NetkeirinClient()
+    try:
+        from src.client import KeirinClient
+        keirin = KeirinClient()
+    except Exception as e:  # 時刻更新は任意機能 (失敗しても取得は続ける)
+        logger.warning("KeirinClient 初期化失敗 (発走時刻の更新は無効): %s", e)
+        keirin = None
     log_rows: list[dict] = []
+    pending = [{"race": r, "st_dt": st, "snapshot_at": sa, "offset": off}
+               for r, st, sa, off in fresh_schedule]
+    last_refresh: dict = {}
+    enc_cache: dict = {}
+    for v in {(it["race"]["race_date"], it["race"]["place_code"]) for it in pending}:
+        last_refresh[v] = datetime.now()   # 起動直後は朝の entries を信用する
 
-    for race, st_dt, snapshot_at, target_offset in fresh_schedule:
+    while pending:
+        pending.sort(key=lambda it: it["snapshot_at"])
+        it = pending[0]
+        race, st_dt, snapshot_at, target_offset = (
+            it["race"], it["st_dt"], it["snapshot_at"], it["offset"])
         now = datetime.now()
         wait_sec = (snapshot_at - now).total_seconds()
+        if wait_sec > REFRESH_MIN_IDLE_SEC and keirin is not None:
+            # 次の取得まで余裕があるときだけ 1 場ぶん発走時刻を再確認 (変更・中止への追随)
+            if refresh_one_venue(keirin, pending, last_refresh, enc_cache, now):
+                continue
+        pending.pop(0)
         if wait_sec > 0:
             logger.info("Sleep %.0fs (%s) → %s pc=%s R%s off=%s @ %s",
                         wait_sec,
@@ -344,6 +474,19 @@ def main() -> None:
             race["race_date"], int(race["place_code"]), int(race["race_no"]),
             now, mins_before, target_offset,
         )
+        # fail (通信/JSON エラー) は発走前なら 1 回だけ再試行 (2026-11-12)。
+        # no_odds (サイトが「オッズなし」と返した) は再試行しない。
+        if result["status"] == "fail" and (
+                st_dt - datetime.now()).total_seconds() > RETRY_BEFORE_START_SEC:
+            time.sleep(RETRY_WAIT_SEC)
+            first_note = result["note"]
+            result = capture_race(
+                client,
+                race["race_date"], int(race["place_code"]), int(race["race_no"]),
+                now, mins_before, target_offset,
+            )
+            result["note"] = ("retried_ok" if result["status"] == "ok"
+                              else "retried; first=%s" % first_note)[:200]
         row = {
             "race_date": race["race_date"],
             "place_code": race["place_code"],
@@ -367,6 +510,12 @@ def main() -> None:
             append_rows("prerace_snapshot_log.csv", [row])
         except Exception as e:
             logger.error("snapshot_log append failed: %s", e)
+        try:
+            trow = timing_row(race, target_offset, snapshot_at, result, st_dt)
+            if trow:
+                append_rows(TIMING_LOG_NAME, [trow])
+        except Exception as e:
+            logger.error("timing_log append failed: %s", e)
 
     n_ok = sum(1 for r in log_rows if r["status"] == "ok")
     n_no = sum(1 for r in log_rows if r["status"] == "no_odds")

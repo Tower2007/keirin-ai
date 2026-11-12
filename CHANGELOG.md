@@ -1,5 +1,28 @@
 # CHANGELOG
 
+## 2026-11-12 (多角検証 12 指摘への一括対応)
+
+- **欠測の自動補完 (指摘 2)**: `ingest_yesterday.py` に直近 10 日の遡り再取得 (`plan_backfill`/`run_backfill`) を追加。
+  race_meta に無い日は全場、race_completion に missing がある日はその場だけ per-race 自己治癒。事後に取れない
+  lines/発走前オッズ/shadow は `data_gaps.csv` (`src/gaps.py`) に理由つきで記録。`build_race_quality.py` は
+  全開催場が同日に結果ゼロなら `all_canceled` でなく `results_missing` にする。
+  `ingest_day.py`: 払戻が既にあるレースは heal 以外でも二重追記しない / lines 空の診断文を実態に修正。
+  実データ: 10/14 (8 場 79 レース) と 10/15 (7 場 72 レース) を遡り取得して complete。
+- **shadow 前向き評価とゲートB (指摘 1)**: `shadow_eval.py` 新設 (official のみ・predicted_at 最新で重複解決、
+  対数損失/的中/ROI、事前登録 30 組の BH-FDR、打ち切り条件)。週次メール §10 に表示。CLAUDE.md を実態に更新。
+- **タイミング計測 (指摘 3)**: daemon が `prerace_capture_timing.csv` (完了基準の遅延・所要・HTTP Date) を記録。
+  `official_dt` は発走前 API が返さず仕様で空と判明。週次 §4 の実測は秒精度 (旧: 整数丸めで常に 0)。
+- **週次メール (指摘 4・8)**: 本文冒頭と件名に「ゲートA n/20」、判定基準にゲートA/B 非含有を明記。日次状態に被覆率閾値
+  (ライン < 50% / オッズ < 80% で ⚠️)。集計範囲を 1 日伸ばして前回の月曜を判定に含める。
+- **payouts 重複除去 (指摘 5)**: 7/11 の遡り取得で二重化した 70 行を `ledger_check.py --dedupe` で除去
+  (1,091,572 -> 1,091,502 行、キー重複 0、払戻合計不変)。週次メールに「キー重複 0」検査。
+- **picks/probs の取りこぼし (指摘 6)**: `weekly_retrain.regenerate_missing_races` — 学習終端より後 (OOS) で
+  既存 probs に無いレースだけを今回モデルで採点して追記 (再学習はしない。ゲート判定は無変更)。次回の週次再学習から有効。
+- **daemon (指摘 8)**: fail は発走 10 秒前までなら 1 回再試行、発走時刻を取得の合間に 1 場ずつ再確認
+  (繰上げ/繰下げ・終了・中止に追随)。次回の daemon 起動から有効 (稼働中プロセスは無変更)。
+- **再学習の通知 (指摘 9)**: NG / WARN / ROI ERROR・NG / 異常終了で要確認メール (`build_attention_notice`)。
+- テスト: `tests/conftest.py` でテスト中の実メール送信を禁止 (autouse)。`tests/test_audit_1112.py` 20 件追加。
+
 ## 2026-09-04 (直前オッズ CSV の月次パーティション化)
 
 - **背景**: `race_odds_prerace.csv` が 807MB / 13.6M 行 (+230MB/月) に育ち、週次の

@@ -58,13 +58,20 @@ ingest_day.py は **差分取り込み** に対応しているため、同じ ve
 |---|---|---|
 | 朝 7:00 (cron) | `ingest_today_lines.py` | 当日開催の全場の meta/entries/**lines**/stats |
 | **朝 8:00 (cron, daemon)** | **`ingest_odds_prerace_daemon.py`** | **発走 5 分前 pre-start odds snapshot** (Phase 6 観測基盤) |
-| 翌朝 5:00 (cron) | `ingest_day.py YESTERDAY VENUE` を全場ループ | results/payouts のみ追加 |
+| 翌朝 5:00 (cron `keirin-ai-results`) | `ingest_yesterday.py` | 昨日の全場の results/payouts + **直近 10 日の遡り再取得** (race_meta に無い日は全場、race_completion に missing がある日はその場だけ。PC 停止の取りこぼしを自動で補う。2026-11-12) |
 | 月曜 7:30 (cron) | `weekly_drift_report.py --mail` | 過去 7 日蓄積状況 + drift を Gmail 通知 (サイレント障害早期検知) |
 | 月曜 3:00 (cron) | `scripts/backup_to_drive.py --keep 3` | D: ドライブ全データを ZIP 化 → Google Drive へ転送 (最新 3 世代保持) |
 | 月曜 6:00 (cron `keirin-ai-weekly-retrain`) | `scripts/cron_weekly_retrain.bat` (build_race_quality → build_race_completion → `weekly_retrain.py`) | 週次 ML 再学習 + 採用品質ゲート (ROI 劣化拒否権つき) |
 | 毎日 7:30 (cron `keirin-ai-shadow-predict`) | `daily_shadow_predict.py` | 当日レースのシャドー予測を追記 (pythonw 起動、発走時刻ガードあり) |
+| 月曜 7:30 (週次メールの一部) | `shadow_eval.py` (`weekly_drift_report.py` が呼ぶ) | **shadow 前向き評価 + 凍結ゲートB 判定 + 打ち切り条件** (下記「shadow 評価とゲートB」) |
 
 ### pre-start odds snapshot 設計 (Phase 6, 2026-05-12 〜)
+- (2026-11-12 更新) 取得時点は既定 `5,3,2,1,0.5` 分前の 5 点。fail (通信/JSON エラー) は発走 10 秒前までなら
+  3 秒後に 1 回だけ再試行、発走時刻は同一場を 10 分間隔・取得の合間に 1 場ずつ keirin.jp で再確認して
+  繰上げ/繰下げ・終了・中止に追随する (`apply_program_update`)。取得完了時刻・所要・HTTP Date は
+  `prerace_capture_timing.csv` に記録 (`capture_lag_sec` は sleep 明け基準で HTTP 所要を含まないため。
+  `official_dt` は発走前 API が返さず 5 月から一貫して空 = 仕様、サイト時刻の独立確認は Date ヘッダで代替)。
+  コード変更は次回のデーモン起動から効く (稼働中のプロセスは止めない)。
 - 朝 8:00 に 1 度 `pythonw.exe` (コンソール非表示) でデーモン起動
 - 当日のレース全部について「st_time - 5 分」を計算 → 内部 `time.sleep()` で待機 →
   ピンポイントで snapshot 取得 → 最終レース後に exit
@@ -106,10 +113,13 @@ ingest_day.py は **差分取り込み** に対応しているため、同じ ve
 - 締切直前は複数場のレースが同時刻に集中するため一部 0.5 分 snapshot が数秒遅れる可能性。
   実測 `minutes_before_start` を記録するので分析側で吸収。
 
-#### 合格基準 / 次アクション
-- 数週間蓄積後、5 分前 / 直前 / 確定実現オッズの 3 点を券種別に再突合。
-- 「最遅約定可能 snapshot (≈1 分前?) → 確定の乖離が必要エッジ幅より小さく、系統的逆選択無し」
-  なら本番 EV 設計続行。満たさなければ「5 分前 odds 基準の EV は机上計算」と確定し直接賭けは棄却。
+#### 合格基準 / 現状 (2026-11-12 更新)
+- 蓄積は 5/3/2/1/0.5 分前の 5 点で継続中。週次メールの §5 (実測ドリフト) と §8 (ゲートA) が毎週判定する。
+- 実測 (11/09 週): 1 分前・0.5 分前は中央値 0%・|ズレ|>10% が数% まで収束。ゲートA の「4 週連続」を
+  止めているのは主に **取得率 (PC 停止日)** で、市場側の品質ではない (S4U 化が未適用の間は継続)。
+- 「最遅約定可能 snapshot → 確定の乖離が必要エッジ幅より小さく系統的逆選択無し」を満たせば本番 EV 設計続行、
+  満たさなければ「5 分前 odds 基準の EV は机上計算」と確定し直接賭けは棄却する。続行/打ち切りの判断は
+  下記「shadow 評価とゲートB」の打ち切り条件に従う。
 
 ### ✅ Phase B: 本番 EV 配管検証 (2026-06-06 完了)
 日付重複ゼロのブロッカー (picks 4/26 凍結 vs prerace odds 5/16〜) を解消し、
@@ -182,6 +192,22 @@ B. strategy/policy lock（EV 閾値・券種を固定して shadow 評価する�
   - 全閾値・券種の比較に FDR 補正を適用し、評価は固定後の OOS のみ
 ```
 
+### shadow 評価とゲートB (2026-11-12 実装: `shadow_eval.py`)
+週次メール §10 に出る。判定は機械的で、購入開始は別判断。
+- **official 行の規則**: `run_type=official` のみ評価に使う。同一 (race_date, place_code, race_no, car_no) が
+  複数なら `predicted_at` 最新を採用 (rerun / legacy_unverifiable は事前時点性を主張できないため除外)。
+- **前向き成績**: 週別 + 累計で、p_win/p_top2/p_top3 の対数損失 (定数予測との差つき) と、make_picks と
+  同じ買い目 (二車複/二車単/三連複/三連単 各 1 点 100 円) の的中率・ROI を確定払戻で清算。
+- **ゲートB (事前登録)**: 戦略 = {SH2, ST2} x EV 閾値 {1.00, 1.10, 1.20} (EV = Harville 組合せ確率 x その取得時点のオッズ)、
+  取得時点 = {5,3,2,1,0.5}。計 30 組すべてを BH-FDR (q < 0.10) の母集団にする。
+  合格 = ゲートA 合格の (取得時点, 券種) で、選択レース >= 200・選択が存在する週 >= 4・ROI > 0 (確定払戻基準 =
+  執行ウェッジ込み)・FDR q < 0.10。OOS は **ロック日 2026-11-13 以降のレースのみ**。ゲートA 未合格の組は
+  「参考値」表示で判定対象外。戦略集合や閾値を変えるときは CHANGELOG に理由を残す (後から緩めない)。
+- **打ち切り条件 (期限と件数)**: ロック日から 12 週 (2027-02-05) 経ってもゲートA 合格 0 -> 取得運用 (PC 稼働・S4U 化)
+  の見直しか観測打ち切りを判断。26 週 (2027-05-14) で合格候補なし、または全戦略で選択 1000 レースに届いても
+  未合格 -> **打ち切り推奨**。到達すると週次メールに「判定の時期」と出る。ゲートB 合格候補が出た場合も同様に表示。
+- 総合状態 (🟢🟡🔴) はデータ収集の健全性のみで決め、ゲートA/B は含めない。件名に「ゲートA n/20」を別掲する。
+
 購入開始は B 通過後の別判断 (FDR 補正済み OOS で執行ウェッジ控除後も
 正エッジが残ることが前提)。gate を後から緩める場合は理由を CHANGELOG に記録。
 
@@ -237,6 +263,8 @@ schtasks /create /tn "keirin-ai-lines" /sc daily /st 07:00 ^
 | race_lines.csv | ライン情報 (narabiX/narabiY) | race_date + place_code + race_no + car_no | **レース前のみ**（完了後は nInfo 空配列） |
 | race_stats.csv | 選手成績（勝率/連対率/戦法回数等） | race_date + place_code + race_no + car_no | レース前後どちらでも (JSJ002) |
 | race_results.csv | 着順・決まり手・天気 | race_date + place_code + race_no + car_no | **レース完了後のみ** (JSJ012) |
+| data_gaps.csv | 事後に取れない欠測の台帳 (lines / prerace_odds / shadow。理由つき) | kind + race_date + place_code | 遡り取得時・手動 |
+| prerace_capture_timing.csv | 直前オッズ取得の完了基準タイミング (2026-11-13 〜) | race + offset | daemon |
 | payouts.csv | 払戻金 (7券種) | race_date + place_code + race_no + bet_type + kumi_ban | **レース完了後のみ** (JSJ012) |
 
 ## keirin.jp スクレイピング仕様

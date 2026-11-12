@@ -145,6 +145,13 @@ CSV_SCHEMAS: dict[str, list[str]] = {
         "status", "n_rows", "note",
         "scheduled_snapshot_dt", "seconds_before_start", "capture_lag_sec",
     ],
+    # 直前オッズ取得の完了基準タイミング (2026-11-12)。prerace_snapshot_log の
+    # capture_lag_sec は fetch 前時刻基準のため、fetch 完了時刻と所要・サーバ時計を別ファイルに残す。
+    "prerace_capture_timing.csv": [
+        "race_date", "place_code", "race_no", "target_offset_min", "status",
+        "scheduled_snapshot_dt", "fetch_start_dt", "fetch_end_dt", "fetch_sec",
+        "done_lag_sec", "seconds_before_done", "server_date",
+    ],
     # shadow 推論ログ (2026-07-11 監査 P1-4 対応)。
     # 「その時点で実際に使えた予測」を監査するため、当日朝にモデル版・hash 付きで
     # per-car 確率を固定保存する (購入なし)。offset 別 EV 候補は本ログ ×

@@ -13,7 +13,7 @@ data/race_quality.csv を出力する。ML 学習時に欠損日や中止日を�
   n_missing_results : n_planned - n_results
   n_missing_payouts : n_planned - n_payouts
   completion_ratio  : n_payouts / n_planned
-  status            : normal / partial_canceled / all_canceled / payout_missing
+  status            : normal / partial_canceled / all_canceled / results_missing / payout_missing
                       / canceled (中止/順延/打切で実レース無し、is_canceled=True)
                       / no_entries (entries 欠落の anomaly。通常 0 件想定)
 """
@@ -24,6 +24,23 @@ from pathlib import Path
 import pandas as pd
 
 from src.config import DATA_DIR as DATA
+
+
+def mark_results_missing(quality: pd.DataFrame) -> pd.DataFrame:
+    """全開催場が同じ日に結果ゼロなら、中止ではなく「未取得 (results_missing)」とする。
+
+    2026-10-14 は 8 場すべてで results が 0 行だったが all_canceled と判定され、
+    取得漏れが「全場中止」として学習・評価から黙って除外されていた (PC 停止で
+    05:00 の結果取込が飛んだ実害)。全場同日の結果ゼロは天災でも 2 場以上同時には
+    稀なので missing 扱いにして区別する (学習から除外される点は従来と同じ)。
+    """
+    q = quality.copy()
+    cand = q[(q["status"] == "all_canceled")]
+    for rd, g in cand.groupby("race_date"):
+        day = q[(q["race_date"] == rd) & (q["n_planned"] > 0) & (~q["is_canceled"])]
+        if len(day) >= 2 and (day["n_results"] == 0).all():
+            q.loc[g.index, "status"] = "results_missing"
+    return q
 
 
 def main() -> None:
@@ -97,6 +114,7 @@ def main() -> None:
         return "normal"
 
     quality["status"] = quality.apply(status_of, axis=1)
+    quality = mark_results_missing(quality)
     quality = quality.sort_values(["race_date", "place_code"]).reset_index(drop=True)
 
     out = DATA / "race_quality.csv"

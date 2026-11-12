@@ -719,6 +719,98 @@ def regenerate_outputs(
     }
 
 
+def regenerate_missing_races(
+    models: dict, df: pd.DataFrame, train_end: str, regen_start: str,
+    feat_cols: list[str],
+) -> dict:
+    """probs/picks に無いレースのうち、今回モデルの OOS (学習終端より後) かつ
+    通常の差分再生成範囲 (regen_start 以降) より前にあるものだけを補って追記する。
+
+    背景 (2026-11-12 監査): regen_start は「既存 probs の最終日」なので、後から結果が入った
+    レース (PC 停止で遅れて治癒した日など、2025-01 以降で 712 件) は永久に picks/probs に入らず、
+    ev 突合や Phase C の母集団が歯抜けになっていた。
+    OOS 条件: race_date > train_end のレースだけ (今回モデルの学習に含まれない)。学習終端以前の
+    欠落は今回モデルでは in-sample になるため補わない (欠落のまま記録する)。
+    既存行は変更せず、欠落レース分だけ追記する (モデル再学習はしない)。
+    """
+    lo, hi = train_end, regen_start
+    sub = df[(df["race_date"] > lo) & (df["race_date"] < hi)]
+    if len(sub) == 0 or not PROBS_PATH.exists():
+        return {"n_fill_races": 0}
+    have = pd.read_csv(PROBS_PATH, usecols=KEYS, dtype=str).drop_duplicates()
+    have_keys = set(zip(have["race_date"], have["place_code"].astype(str), have["race_no"].astype(str)))
+    rk = list(zip(sub["race_date"].astype(str), sub["place_code"].astype(str), sub["race_no"].astype(str)))
+    miss_mask = np.array([k not in have_keys for k in rk])
+    miss = sub[miss_mask].copy()
+    if len(miss) == 0:
+        return {"n_fill_races": 0}
+    preds = {t: models[t].predict(miss[feat_cols], num_iteration=models[t].best_iteration)
+             for t in CLF_TARGETS + [REG_TARGET]}
+    prob_df = miss[KEYS + ["car_no"]].copy()
+    prob_df["p_win"] = preds["y_win"]
+    prob_df["p_top2"] = preds["y_top2"]
+    prob_df["p_top3"] = preds["y_top3"]
+    prob_df["pred_rank"] = preds["y_rank"]
+    old = pd.read_csv(PROBS_PATH)
+    out = pd.concat([old, prob_df], ignore_index=True)[list(old.columns)]
+    out.sort_values(KEYS + ["car_no"]).reset_index(drop=True).to_csv(PROBS_PATH, index=False)
+    picks = mlb.make_picks(miss, preds)
+    if PICKS_PATH.exists():
+        oldp = pd.read_csv(PICKS_PATH)
+        outp = pd.concat([oldp, picks], ignore_index=True)[list(oldp.columns)]
+    else:
+        outp = picks
+    outp.sort_values(KEYS).reset_index(drop=True).to_csv(PICKS_PATH, index=False)
+    n = int(len(picks))
+    print(f"  欠落レース補完 (学習終端 {lo} より後 〜 {hi} 未満): {n} レースを今回モデルで採点して追記")
+    return {"n_fill_races": n, "n_fill_rows": int(len(prob_df))}
+
+
+# ─── 通知 (2026-11-12): NG / WARN / ROI ERROR・NG / 異常終了 を要確認メールにする ───────
+
+def build_attention_notice(verdict: str, reason: str, roi_res: dict | None,
+                           adopted: bool, today: date | None = None,
+                           crash: str = "") -> tuple[str, str] | None:
+    """要確認メールの (件名, 本文)。通知不要 (OK かつ ROI OK/SKIP) なら None。
+
+    書式契約 v1: 件名は `[keirin] <絵文字> <種別> <日付> <バッジ> (<サマリ>)`、状態は 3 段階。
+    SKIP (初回・champion in-sample 回避等) は通常の想定内なので通知しない。
+    """
+    today = today or date.today()
+    roi_v = (roi_res or {}).get("verdict", "")
+    if crash:
+        badge, summary = "🔴NG", "実行失敗"
+    elif verdict == "NG" or roi_v == "NG":
+        badge, summary = "🔴NG", "新モデル採用見送り" if not adopted else "要確認"
+    elif verdict == "WARN" or roi_v == "ERROR":
+        badge = "🟡WARN"
+        summary = "ROI ゲート実行失敗" if roi_v == "ERROR" else "精度ゲート WARN (採用)"
+    else:
+        return None
+    subject = f"[keirin] 🔧 週次再学習 {today.isoformat()} {badge} ({summary})"
+    lines = [f"週次再学習の結果が要確認です ({badge})。", "",
+             f"- 精度ゲート: {verdict}: {reason}",
+             f"- ROI 拒否権: {roi_v or '-'}: {(roi_res or {}).get('reason', '')}",
+             f"- 採用: {'した' if adopted else 'していない (旧モデル維持)'}"]
+    if crash:
+        lines += ["", "異常終了:", crash]
+    lines += ["", "履歴: D:\\keirin-ai-data\\retrain_history.csv / weekly_model\\MANIFEST.md",
+              "NG でも exit 0 で終わるため、このメールが唯一の通知です。"]
+    return subject, "\n".join(lines)
+
+
+def _notify_attention(notice: tuple[str, str] | None) -> None:
+    """通知は失敗しても再学習の成否に影響させない。"""
+    if not notice:
+        return
+    try:
+        from gmail_notify import send_email
+        send_email(subject=notice[0], body=notice[1])
+        print(f"[mail] sent: {notice[0]}")
+    except Exception as e:
+        print(f"[mail] 送信失敗 (再学習の結果は変わらない): {e}")
+
+
 def update_ev_merged() -> None:
     """ev_prerace_pipeline.py を実行して ev_prerace_merged.csv を更新。"""
     print("\n[5] ev_prerace_pipeline.py 実行 (ev_prerace_merged.csv 更新)")
@@ -733,6 +825,16 @@ def update_ev_merged() -> None:
 # ─── 5. メイン ────────────────────────────────────────────────────────────
 
 def main() -> None:
+    try:
+        _run()
+    except Exception:
+        import traceback
+        _notify_attention(build_attention_notice(
+            "NG", "実行中に例外", None, adopted=False, crash=traceback.format_exc()[-1500:]))
+        raise
+
+
+def _run() -> None:
     _stdout_utf8()
     ap = argparse.ArgumentParser(description="週次 ML 再学習 + 採用品質ゲート")
     ap.add_argument("--force", action="store_true",
@@ -833,6 +935,7 @@ def main() -> None:
         hist_row.update({"adopted": 0, "regen_start": "", "regen_end": "",
                          "runtime_sec": round(time.time() - t0, 1)})
         _append_history(hist_row)
+        _notify_attention(build_attention_notice(verdict, reason, roi_res, adopted=False))
         return  # exit 0 (タスクとしては正常)
 
     if verdict == "WARN":
@@ -875,6 +978,7 @@ def main() -> None:
 
     print(f"\n  probs/picks 差分再生成: {regen_start} 〜 {oos_end}")
     regen_info = regenerate_outputs(models, df, regen_start, oos_end, feat_cols)
+    fill_info = regenerate_missing_races(models, df, train_end, regen_start, feat_cols)
 
     update_ev_merged()
 
@@ -890,8 +994,10 @@ def main() -> None:
     print(f"完了 (verdict={verdict}, 採用): "
           f"probs +{regen_info.get('n_new_rows', 0):,} 行 / "
           f"picks +{regen_info.get('n_new_races', 0):,} レース / "
-          f"runtime {time.time() - t0:.1f}s")
+          f"runtime {time.time() - t0:.1f}s"
+          + (f" / 欠落補完 {fill_info['n_fill_races']} レース" if fill_info.get("n_fill_races") else ""))
     print("=" * 70)
+    _notify_attention(build_attention_notice(verdict, reason, roi_res, adopted=True))
 
 
 if __name__ == "__main__":
