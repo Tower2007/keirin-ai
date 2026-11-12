@@ -351,9 +351,30 @@ def evaluate(data_dir, gate_a: dict | None, today: date | None = None) -> dict:
     if gate_a:
         n_pass = sum(1 for v in gate_a["offsets"].values()
                      for b in v["bet_verdicts"].values() if b)
+    # 市場基準の確率 (計器, market_anchor.py, 2026-11-12)。失敗しても本体の評価は返す。
+    try:
+        import market_anchor
+        anchor = market_anchor.run(d, off, res, complete, today)
+    except Exception as e:  # noqa: BLE001
+        anchor = {"error": f"{type(e).__name__}: {e}"}
     return {"forward": fm, "policies": pol, "sunset": sunset_status(pol, n_pass, today),
             "n_official_rows": int(len(off)),
-            "n_official_days": int(off["race_date"].nunique()) if len(off) else 0}
+            "n_official_days": int(off["race_date"].nunique()) if len(off) else 0,
+            "market_anchor": anchor}
+
+
+def _anchor_lines(res: dict | None) -> list[str]:
+    """market_anchor の 2 行 (無い・失敗はその旨 1 行)。"""
+    a = (res or {}).get("market_anchor")
+    if a is None:
+        return []
+    if a.get("error"):
+        return [f"市場基準の確率 (計器): 取得失敗 ({a['error']})"]
+    try:
+        import market_anchor
+        return market_anchor.lines(a)
+    except Exception as e:  # noqa: BLE001
+        return [f"市場基準の確率 (計器): 表示失敗 ({type(e).__name__})"]
 
 
 # ─── 表示 (md / html) ──────────────────────────────────────────────────────
@@ -388,6 +409,10 @@ def md_lines(res: dict | None, err: str = "") -> list[str]:
         L.append("対数損失のカッコ内は「定数予測 (的中率の平均)」との差 (負 = 予測に情報あり)。"
                  "ROI 100% が損益分岐 (控除率 約25%)。")
     L.append("")
+    for x in _anchor_lines(res):
+        L.append(f"- {x}")
+    if _anchor_lines(res):
+        L.append("")
     L.append(f"### ゲートB (戦略ロック {sun['lock_date']} 以降の OOS のみ)")
     L.append("")
     L.append(f"条件: 戦略×取得時点ごとに選択レース >= {GATE_B_MIN_RACES} かつ {GATE_B_MIN_WEEKS} 週以上、"
@@ -436,6 +461,8 @@ def html_lines(res: dict | None, err: str, tbl: str, th: str, th_r: str, td) -> 
         p.append('</table>')
     else:
         p.append('<p style="color:#999;">評価できる確定済みレースなし</p>')
+    for x in _anchor_lines(res):
+        p.append(f'<p style="color:#444; font-size:12px;">{x}</p>')
     n_cand = sum(1 for x in pol if x["verdict"] == "合格候補")
     n_a = sum(1 for x in pol if x["a_pass"])
     p.append(f'<p><b>ゲートB</b> (ロック {sun["lock_date"]} 以降): 合格候補 <b>{n_cand}</b> / '
