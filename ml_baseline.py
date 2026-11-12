@@ -447,23 +447,30 @@ def train_one(
     train: pd.DataFrame, test: pd.DataFrame,
     target: str, params: dict, feat_cols: list[str],
 ) -> tuple[lgb.Booster, np.ndarray, float]:
-    X_train = train[feat_cols]
-    y_train = train[target]
     X_test = test[feat_cols]
     y_test = test[target]
 
+    # early stopping は学習期間の末尾 10% (日付) で行う (2026-11-12)。旧版は test を
+    # valid_sets に渡しており、test の成績で反復数を選ぶ = test への軽い過適合で評価が
+    # 楽観的になっていた (weekly_retrain.train_and_evaluate と同じ方式に揃える)。
+    # 過去に生成した ml_pred_probs / ml_picks は書き換えない (次回以降の学習から)。
+    dt = pd.to_datetime(train["race_date"])
+    is_val = (dt >= dt.quantile(0.9)).to_numpy()
+    X_tr, y_tr = train.loc[~is_val, feat_cols], train.loc[~is_val, target]
+    X_va, y_va = train.loc[is_val, feat_cols], train.loc[is_val, target]
+
     cat_in_feat = [c for c in FEAT_CAT if c in feat_cols]
-    train_set = lgb.Dataset(X_train, y_train, categorical_feature=cat_in_feat)
-    valid_set = lgb.Dataset(X_test, y_test, reference=train_set,
-                             categorical_feature=cat_in_feat)
+    train_set = lgb.Dataset(X_tr, y_tr, categorical_feature=cat_in_feat)
+    valid_set = lgb.Dataset(X_va, y_va, reference=train_set,
+                            categorical_feature=cat_in_feat)
     model = lgb.train(
         params, train_set,
         num_boost_round=800,
         valid_sets=[valid_set],
-        valid_names=["test"],
+        valid_names=["val"],
         callbacks=[lgb.early_stopping(50), lgb.log_evaluation(0)],
     )
-    pred = model.predict(X_test)
+    pred = model.predict(X_test, num_iteration=model.best_iteration)
     if params["objective"] == "binary":
         score = roc_auc_score(y_test, pred)
         print(f"  {target}: AUC = {score:.4f} (best iter {model.best_iteration})")

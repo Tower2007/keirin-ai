@@ -25,6 +25,21 @@
     - OOS ECE が旧比 +0.010 超悪化             → NG  (+0.005 超で WARN)
   旧メタ無し (初回) は床チェックのみで採用。--force でゲート無視 (床含む) 強制採用。
 
+採用ゲート v3 (2026-11-12, 精度検証 Keirin C/E): **同じ窓で現役モデルを採点し直して比べる**。
+  旧方式は新モデルの OOS 指標を「前回 meta に記録された別窓の値」と比べていたため、窓のずれ
+  (1 週) がノイズになり緩い閾値が必要で、WARN でも採用していた (25 回中 25 回採用)。
+  v3 では現役 (champion) を今回の OOS 窓・同じ行で採点し直し、同条件で比較する:
+    - 絶対床 AUC_FLOOR は従来どおり
+    - 同窓 AUC 差 < -SAME_AUC_DROP_NG (0.003) または logloss 比 > SAME_LL_RATIO_NG (1.005)
+      または ECE 差 > SAME_ECE_NG (0.005)                                 → NG (採用しない)
+    - 同窓 AUC 差 < -SAME_AUC_DROP_WARN (0.001) / logloss 比 > 1.002 / ECE 差 > 0.003 → WARN
+    - **WARN は採用しない** (現役を維持)。ただし現役の学習から STALE_DAYS (28) 日以上たっていれば
+      鮮度を優先して採用する (WARN 記録)。OK は採用。
+  現役を採点できない (初回 / 特徴量列が揃わない / 現役の学習終端が OOS 窓に食い込む) ときだけ
+  従来の別窓比較 (gate_mode=cross_window、WARN は従来どおり採用) にフォールバックする。
+  ROI 拒否権 (roi_gate.py) の式と呼び出し条件は不変。retrain_history に gate_mode と
+  champ_*_same (現役の同窓指標) を記録する。
+
 採用ゲート v2: ROI 劣化拒否権 (2026-07 追加。仕様は roi_gate.py 参照):
   精度ゲートが採用判定を出した後・モデル昇格前の最終チェックとして、champion
   (現役 ml_weekly_model_y_win.lgb) / candidate の「y_win 予測上位 2 車の
@@ -111,6 +126,14 @@ LOGLOSS_RATIO_NG = 1.03     # 旧比 logloss 悪化率 NG
 LOGLOSS_RATIO_WARN = 1.01   # 〃 WARN
 ECE_DELTA_NG = 0.010        # 旧比 ECE 悪化幅 NG
 ECE_DELTA_WARN = 0.005      # 〃 WARN
+# v3: 同じ窓で現役を採点し直す比較 (窓ずれノイズが無いので閾値を詰める)
+SAME_AUC_DROP_NG = 0.003
+SAME_AUC_DROP_WARN = 0.001
+SAME_LL_RATIO_NG = 1.005
+SAME_LL_RATIO_WARN = 1.002
+SAME_ECE_NG = 0.005
+SAME_ECE_WARN = 0.003
+STALE_DAYS = 28             # 現役がこの日数以上古ければ WARN でも採用 (鮮度優先)
 
 
 def _stdout_utf8() -> None:
@@ -396,6 +419,69 @@ def _should_adopt(new_oos: dict, old_meta: dict | None,
     )
 
 
+def _score_champion_same_window(df: pd.DataFrame, oos_start: str, oos_end: str,
+                                old_meta: dict | None) -> tuple[dict | None, str]:
+    """現役 y_win モデルを今回の OOS 窓・同じ行で採点し直す。(指標 or None, 説明)。"""
+    try:
+        champ_path = _model_path("y_win")
+        if old_meta is None or not champ_path.exists():
+            return None, "現役なし (初回)"
+        champ_end = ((old_meta or {}).get("train_info") or {}).get("train_date_max", "")
+        if champ_end and champ_end >= oos_start:
+            return None, f"現役の学習終端 {champ_end} が OOS 窓 ({oos_start}〜) に食い込む"
+        cols = old_meta.get("feature_columns") or []
+        oos = df[(df["race_date"] >= oos_start) & (df["race_date"] <= oos_end)]
+        if not cols or any(c not in oos.columns for c in cols) or len(oos) == 0:
+            return None, "現役の特徴量列が揃わない"
+        champ = lgb.Booster(model_file=str(champ_path))
+        p = champ.predict(oos[cols])
+        y = oos["y_win"].to_numpy()
+        return {"auc": float(roc_auc_score(y, p)),
+                "logloss": float(log_loss(y, np.clip(p, 1e-6, 1 - 1e-6))),
+                "ece": calibration_error(y, p)}, "同じ OOS 窓で現役を採点"
+    except Exception as e:  # noqa: BLE001 — 採点不能は従来比較へフォールバック
+        return None, f"現役の採点に失敗 ({type(e).__name__}: {e})"
+
+
+def _champion_age_days(old_meta: dict | None, today: date) -> int | None:
+    try:
+        ts = (old_meta or {}).get("trained_at")
+        return (today - datetime.fromisoformat(ts).date()).days if ts else None
+    except Exception:
+        return None
+
+
+def _should_adopt_same_window(new_oos: dict, champ: dict, old_meta: dict | None,
+                              today: date, force: bool = False) -> tuple[str, str, bool]:
+    """v3: 同じ窓での新旧比較。(verdict, reason, adopt) を返す (docstring の規則)。"""
+    nw = new_oos["y_win"]
+    if force:
+        return "OK", "--force 指定、強制採用", True
+    if nw["auc"] < AUC_FLOOR:
+        return "NG", (f"y_win OOS AUC {nw['auc']:.4f} が絶対床 {AUC_FLOOR} 割れ "
+                      "(データ/特徴量の破損疑い)"), False
+    ng, warn = [], []
+    d_auc = nw["auc"] - champ["auc"]
+    ratio = nw["logloss"] / champ["logloss"] if champ["logloss"] > 0 else 1.0
+    d_ece = nw["ece"] - champ["ece"]
+    txt = (f"同窓 AUC {champ['auc']:.4f}->{nw['auc']:.4f} ({d_auc:+.4f}), "
+           f"logloss {champ['logloss']:.5f}->{nw['logloss']:.5f} ({(ratio - 1) * 100:+.2f}%), "
+           f"ECE {champ['ece']:.4f}->{nw['ece']:.4f}")
+    if d_auc < -SAME_AUC_DROP_NG or ratio > SAME_LL_RATIO_NG or d_ece > SAME_ECE_NG:
+        ng.append(txt)
+    elif d_auc < -SAME_AUC_DROP_WARN or ratio > SAME_LL_RATIO_WARN or d_ece > SAME_ECE_WARN:
+        warn.append(txt)
+    if ng:
+        return "NG", "[同窓] 劣化: " + "; ".join(ng), False
+    if warn:
+        age = _champion_age_days(old_meta, today)
+        if age is not None and age >= STALE_DAYS:
+            return "WARN", (f"[同窓] 微劣化だが現役が {age} 日前の学習 (>= {STALE_DAYS}) のため"
+                            f"鮮度を優先して採用: {warn[0]}"), True
+        return "WARN", f"[同窓] 微劣化のため採用せず現役維持: {warn[0]}", False
+    return "OK", "[同窓] OK: " + txt, True
+
+
 def _parse_quinella_kumi(kumi) -> tuple[int, int] | None:
     """payouts.csv の二車複組合せ表記 ('1=2' 等) を (小, 大) タプルへ正規化する。
 
@@ -571,6 +657,8 @@ HISTORY_HEADER = [
     # 採用ゲート v2 (ROI 拒否権) — 2026-07 追加。旧行は空欄のまま
     "roi_champion", "roi_candidate", "roi_delta_pt",
     "roi_ci_low", "roi_ci_high", "roi_n_bets", "roi_verdict",
+    # 採用ゲート v3 (同じ窓で現役を採点し直す) — 2026-11-12 追加。旧行は空欄
+    "gate_mode", "champ_auc_same", "champ_logloss_same", "champ_ece_same",
 ]
 
 
@@ -875,8 +963,17 @@ def _run() -> None:
 
     print("\n[4] 採用ゲート判定")
     old_meta = _load_current_meta()
-    verdict, reason = _should_adopt(oos_metrics, old_meta, force=args.force)
-    print(f"  verdict = {verdict}: {reason}")
+    champ_same, champ_note = _score_champion_same_window(df, oos_start, oos_end, old_meta)
+    if champ_same is not None:
+        gate_mode = "same_window"
+        verdict, reason, adopt_ok = _should_adopt_same_window(
+            oos_metrics, champ_same, old_meta, today, force=args.force)
+    else:
+        gate_mode = "cross_window"
+        verdict, reason = _should_adopt(oos_metrics, old_meta, force=args.force)
+        adopt_ok = verdict != "NG"
+        reason = f"[別窓比較: {champ_note}] {reason}"
+    print(f"  gate_mode = {gate_mode} / verdict = {verdict} / adopt = {adopt_ok}: {reason}")
 
     # 採用ゲート v2: ROI 劣化拒否権 (精度ゲートが採用判定のときのみ最終チェック)。
     # NG (大幅かつ有意な ROI 劣化) だけ採用をブロックする。SKIP/ERROR/WARN は
@@ -914,9 +1011,13 @@ def _run() -> None:
         "old_logloss_win": round(old_win["logloss"], 6) if "logloss" in old_win else "",
         "old_ece_win": round(old_win["ece"], 5) if "ece" in old_win else "",
         **_roi_history_fields(roi_res),
+        "gate_mode": gate_mode,
+        "champ_auc_same": round(champ_same["auc"], 5) if champ_same else "",
+        "champ_logloss_same": round(champ_same["logloss"], 6) if champ_same else "",
+        "champ_ece_same": round(champ_same["ece"], 5) if champ_same else "",
     }
 
-    if verdict == "NG":
+    if verdict == "NG" or not adopt_ok:
         print("=" * 70)
         print(f"新モデル採用見送り (NG): {reason}")
         print("旧モデルを維持します。--force で強制採用可。")
