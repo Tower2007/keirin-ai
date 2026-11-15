@@ -36,6 +36,7 @@ from datetime import date, timedelta
 import pandas as pd
 
 from src.config import DATA_DIR
+from src import voids as _voids
 
 KEYS = ["race_date", "place_code", "race_no"]
 
@@ -90,6 +91,21 @@ def build(start: str | None = None) -> pd.DataFrame:
     else:
         comp["canceled_day"] = 0
 
+    # 正当な欠損の台帳 (void_races.csv: 全返還の不成立 / 日全体の中止) に載るレースは欠測から除外し、
+    # status=canceled + void_reason で数える (2026-11-15)。read は DATA_DIR 差し替えに追随させる。
+    comp["void_reason"] = ""
+    try:
+        reasons = {(v["race_date"], v["place_code"], v["race_no"]): v["reason"]
+                   for v in _voids.load_voids(DATA_DIR)}
+        miss = comp["status"].str.startswith("missing")
+        for i in comp.index[miss]:
+            rd, pc, rn = str(comp.at[i, "race_date"]), str(comp.at[i, "place_code"]), str(comp.at[i, "race_no"])
+            r = reasons.get((rd, pc, rn)) or reasons.get((rd, pc, ""))
+            if r:
+                comp.at[i, "status"] = "canceled"
+                comp.at[i, "void_reason"] = r
+    except Exception:
+        pass   # 台帳が読めなくても従来どおりの判定で続行
     return comp.sort_values(KEYS).reset_index(drop=True)
 
 
@@ -160,6 +176,8 @@ def refresh(days: int | None = None) -> pd.DataFrame:
         if out_path.exists():
             old = pd.read_csv(out_path, dtype={k: str for k in KEYS})
             old = old[old["race_date"] < start]
+            if "void_reason" not in old.columns:
+                old["void_reason"] = ""
             new = pd.concat([old, new], ignore_index=True)
     else:
         new = build(None)

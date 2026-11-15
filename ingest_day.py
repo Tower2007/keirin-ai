@@ -51,6 +51,7 @@ from src.parser import (
     parse_payouts,
 )
 from src.storage import append_row, append_rows, has_race_day, RaceDayIndex
+from src.voids import is_full_refund, record_void
 
 logging.basicConfig(
     level=logging.INFO,
@@ -223,6 +224,14 @@ def _ingest_results_and_payouts(client: KeirinClient, place_code: int,
                 if not skip_payouts:
                     counts["payouts"] = counts.get("payouts", 0) + append_rows(
                         "payouts.csv", payouts)
+                # 全返還 (不成立) は着順表・払戻がサイトに元々無い正当な欠損。取得済みレスポンスから
+                # 判定して台帳 void_races.csv へ残す (race_completion が欠測から除外する、2026-11-15)
+                if not payouts and is_full_refund(jsj012):
+                    try:
+                        record_void(race_date, place_code, r_no, "full_refund",
+                                    "JSJ012 払戻が全返還 (不成立)")
+                    except Exception as e:
+                        logger.error("  record_void failed R%d: %s", r_no, e)
         except Exception as e:
             logger.error("  JSJ012 R%d failed: %s", r_no, e)
     if index is not None and results_added > 0:
@@ -294,6 +303,13 @@ def ingest_one_day(client: KeirinClient, place_code: int, race_date: str,
     # 公式キャンセル日 (中止/順延/打切) は entries/results が存在しないので
     # meta に is_canceled=True で記録して return。再 ingest 時の冪等性を保つ。
     if program["meta"]["is_canceled"]:
+        # 朝の取り込みで meta が is_canceled=False のまま先に入った日は追記専用で直せないので、
+        # 台帳 void_races.csv 側で「日全体の中止」を上書き判定する (2026-11-15)
+        try:
+            record_void(race_date, place_code, "", "day_canceled",
+                        "PC0201 flgRaceCancel かつ cntRace=0")
+        except Exception as e:
+            logger.error("  record_void (day) failed: %s", e)
         if not has_meta:
             counts["meta"] = append_row("race_meta.csv", program["meta"])
             if index is not None:

@@ -120,6 +120,15 @@ def _day_has_meta(d: str) -> bool:
         return False
 
 
+def refresh_df_counts() -> dict:
+    """race_completion.csv の取得漏れ候補 (missing_*) と正当な欠損 (void_reason 付き) の件数。"""
+    import pandas as pd
+    df = pd.read_csv(DATA_DIR / "race_completion.csv", dtype=str)
+    vr = df["void_reason"].fillna("") if "void_reason" in df.columns else pd.Series("", index=df.index)
+    return {"missing": int(df["status"].str.startswith("missing").sum()),
+            "void": int((vr != "").sum())}
+
+
 def exit_code(summary: dict, backfill_failures: int = 0, backfill_crashed: bool = False,
               refresh_failed: bool = False) -> int:
     """部分失敗があれば 1、無ければ 0 (2026-11-15)。
@@ -190,6 +199,9 @@ def main() -> int:
         days = max((date.today() - date.fromisoformat(target_date)).days + 1, LOOKBACK_DAYS + 2)
         n = len(refresh(days=days))
         logger.info("race_completion.csv refreshed (days=%d, %d races)", days, n)
+        _c = refresh_df_counts()
+        logger.info("完了台帳: 取得漏れ候補 %d R (全期間) / 正当な欠損 (全返還・中止) %d R",
+                    _c["missing"], _c["void"])
     except Exception as e:
         refresh_failed = True
         logger.error("race_completion refresh failed: %s", e)

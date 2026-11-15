@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## 2026-11-15 (完了台帳: 正当な欠損 = 全返還・日全体中止を欠測から除外)
+
+- 原因: 全返還 (不成立) のレースは着順表・払戻がサイトに元々無く、日全体の中止は朝の取り込みで race_meta に is_canceled=False が
+  先に入って (追記専用のため) 直らない。いずれも race_completion で missing のまま残り、取得漏れ候補に出続けた。
+- **`void_races.csv` 新設** (`src/voids.py`: `record_void` 冪等 / `load_voids` / `is_full_refund`)。列 = recorded_at, race_date, place_code,
+  race_no (空 = その場・日の全レース), reason (full_refund / day_canceled), note。
+- `build_race_completion.build`: 台帳に載るレースは status=canceled + 新列 `void_reason` で数え、missing から除外
+  (meta の is_canceled を上書き判定)。週次レポート・日次ログの欠測件数は status が missing* のものを数えるので同じ定義になる。
+  日次ログに「取得漏れ候補 / 正当な欠損」の件数を追加
+- **自動仕分け**: `ingest_day` が取得済みの JSJ012 から全返還 (払戻なし + 払戻欄が全返還) を、PC0201 から日全体中止を検出して
+  自動で台帳へ記録 (遡り取得・`recover_missing_races.py` も ingest_one_day 経由で同じ)。追加のサイトアクセスなし
+- 11/15 に 2026-11-14 以前の missing 137 R をサイト確認済みの根拠で記録 (全返還 130 R + 6/2 場 74 日全体中止 7 R) し台帳を再構築:
+  missing は 11/15 当日の結果待ち 80 R のみ (本当の取得漏れは 0)
+- tests: `tests/test_voids.py` (6 件)
+
 ## 2026-11-15 (並び欠損の取り直し・取り込みの終了コード)
 
 - **並び (race_lines) 欠損の原因を数字で確認**: 7/1〜11/15 (PC 停止 2 日除く) でレース単位 17.0% 欠損、うち **93% (1,631/1,751 R) が
