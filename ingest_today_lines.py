@@ -36,7 +36,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def main() -> None:
+def exit_code(summary: dict) -> int:
+    """errors>0 なら 1、それ以外は 0 (2026-11-15)。
+
+    「当日だが並び (nInfo) 未掲載」は想定内の空 (WARN ログのみ・errors に数えない)。
+    例外で取れなかった場 (summary["errors"]) だけを部分失敗として非ゼロにする。
+    """
+    return 1 if summary.get("errors", 0) > 0 else 0
+
+
+def main() -> int:
     target_date = sys.argv[1] if len(sys.argv) > 1 else date.today().isoformat()
 
     client = KeirinClient()
@@ -70,7 +79,8 @@ def main() -> None:
         summary["no_race"],
         summary["errors"],
     )
+    return exit_code(summary)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

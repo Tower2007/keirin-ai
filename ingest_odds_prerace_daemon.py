@@ -52,6 +52,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config import DATA_DIR
+from src.lines_fill import start_lines_worker
 from src.netkeirin_client import NetkeirinClient
 from src.netkeirin_parser import parse_odds_lists
 from src.odds_prerace import monthly_name
@@ -436,6 +437,9 @@ def main() -> None:
     except Exception as e:  # 時刻更新は任意機能 (失敗しても取得は続ける)
         logger.warning("KeirinClient 初期化失敗 (発走時刻の更新は無効): %s", e)
         keirin = None
+    # 並びの取り直し (2026-11-15): 7:00 の取り込み時点で並び未掲載の場 (主にミッドナイト) を、
+    # 専用スレッドで発走前に取り直す。オッズ取得ループとは独立 (待ち合わせない・例外は握る)。
+    start_lines_worker(races)
     log_rows: list[dict] = []
     pending = [{"race": r, "st_dt": st, "snapshot_at": sa, "offset": off}
                for r, st, sa, off in fresh_schedule]

@@ -93,6 +93,54 @@ def build(start: str | None = None) -> pd.DataFrame:
     return comp.sort_values(KEYS).reset_index(drop=True)
 
 
+def lines_gap_summary(days: int = 14, start: str | None = None,
+                      end: str | None = None) -> dict:
+    """並び (race_lines.csv) の欠損 R 数 / 率を返す (2026-11-15)。
+
+    race_entries にあるレースのうち race_lines に 1 行も無いものを欠損とする。並びは事後に取れず
+    (過去日のページに nInfo が無い)、ミッドナイト開催を中心に場・日単位でまるごと欠けるが、
+    台帳 data_gaps.csv には PC 停止日しか載らなかったため、日次/週次で率を見えるようにする。
+    期間 = [start, end] (既定: 昨日までの直近 days 日)。当日は取り直し中なので含めない。
+    戻り値: races / missing_races / rate / venue_days / missing_venue_days /
+            by_band (発走区分別 {"morning","day","night","midnight"}: races, missing)。
+    """
+    today = date.today()
+    end = end or (today - timedelta(days=1)).isoformat()
+    start = start or (date.fromisoformat(end) - timedelta(days=days - 1)).isoformat()
+    ent = pd.read_csv(DATA_DIR / "race_entries.csv",
+                      usecols=KEYS + ["st_time"], dtype=str, low_memory=False)
+    ent = ent[(ent["race_date"] >= start) & (ent["race_date"] <= end)]
+    ent = ent.drop_duplicates(KEYS)
+    lp = DATA_DIR / "race_lines.csv"
+    if lp.exists():
+        ln = pd.read_csv(lp, usecols=KEYS, dtype=str, low_memory=False)
+        ln = ln[(ln["race_date"] >= start) & (ln["race_date"] <= end)].drop_duplicates(KEYS)
+        ln = ln.assign(_has=1)
+        m = ent.merge(ln, on=KEYS, how="left")
+        m["miss"] = m["_has"].isna()
+    else:
+        m = ent.assign(miss=True)
+
+    def _band(first: str) -> str:
+        try:
+            h = int(str(first)[:2])
+        except ValueError:
+            return "day"
+        return "morning" if h < 10 else "day" if h < 15 else "night" if h < 20 else "midnight"
+
+    vd = m.groupby(["race_date", "place_code"]).agg(
+        n=("miss", "size"), miss=("miss", "sum"), first=("st_time", "min")).reset_index()
+    vd["band"] = vd["first"].map(_band)
+    by_band = {b: {"races": int(g["n"].sum()), "missing": int(g["miss"].sum())}
+               for b, g in vd.groupby("band")}
+    races = int(len(m))
+    miss = int(m["miss"].sum())
+    return {"start": start, "end": end, "races": races, "missing_races": miss,
+            "rate": (miss / races) if races else 0.0,
+            "venue_days": int(len(vd)), "missing_venue_days": int((vd["miss"] > 0).sum()),
+            "by_band": by_band}
+
+
 def refresh(days: int | None = None) -> pd.DataFrame:
     """race_completion.csv を再計算して書き出す (days=None は全期間)。
 
@@ -128,6 +176,12 @@ def main() -> None:
 
     new = refresh(args.days)
     print(f"wrote {DATA_DIR / 'race_completion.csv'} ({len(new):,} races)")
+    try:
+        g = lines_gap_summary(days=14)
+        print(f"並び欠損 ({g['start']}〜{g['end']}): {g['missing_races']} / {g['races']} R "
+              f"({g['rate'] * 100:.1f}%)  場・日 {g['missing_venue_days']} / {g['venue_days']}")
+    except Exception as e:
+        print(f"並び欠損の集計に失敗: {e}")
     print("\n=== status counts ===")
     print(new["status"].value_counts().to_string())
     # 取得漏れ候補 (直近 14 日、canceled は正当欠損なので除外)

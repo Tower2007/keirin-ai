@@ -63,8 +63,13 @@ def plan_backfill(meta_dates: set, completion, today: date,
     return plan
 
 
-def run_backfill(client: KeirinClient, index: RaceDayIndex) -> int:
-    """plan_backfill に従って遡り取得する。戻り値 = 試行した venue-day 数。"""
+def run_backfill(client: KeirinClient, index: RaceDayIndex,
+                 failures: list | None = None) -> int:
+    """plan_backfill に従って遡り取得する。戻り値 = 試行した venue-day 数。
+
+    failures を渡すと、例外で失敗した (日付, 場) をそこへ追加する (終了コード判定用。
+    「その日・その場に開催が無い」は例外ではないので数えない)。
+    """
     import pandas as pd
     try:
         meta_dates = set(pd.read_csv(DATA_DIR / "race_meta.csv", usecols=["race_date"],
@@ -88,6 +93,8 @@ def run_backfill(client: KeirinClient, index: RaceDayIndex) -> int:
                 ingest_one_day(client, pc, d, index=index if whole_day else None)
             except Exception as e:
                 logger.error("BACKFILL FAILED %s venue=%d: %s", d, pc, e)
+                if failures is not None:
+                    failures.append((d, pc))
                 try:
                     client.reset_session()
                 except Exception:
@@ -113,7 +120,18 @@ def _day_has_meta(d: str) -> bool:
         return False
 
 
-def main() -> None:
+def exit_code(summary: dict, backfill_failures: int = 0, backfill_crashed: bool = False,
+              refresh_failed: bool = False) -> int:
+    """部分失敗があれば 1、無ければ 0 (2026-11-15)。
+
+    旧実装は errors>0・backfill 例外・完了表の更新失敗でも 0 で終わり、タスクの結果コードで
+    統合監視が部分失敗を拾えなかった。「その日に開催が無い (no_race)」「skipped」は失敗ではない。
+    """
+    return 1 if (summary.get("errors", 0) > 0 or backfill_failures > 0
+                 or backfill_crashed or refresh_failed) else 0
+
+
+def main() -> int:
     target_date = (
         sys.argv[1] if len(sys.argv) > 1
         else (date.today() - timedelta(days=1)).isoformat()
@@ -151,11 +169,14 @@ def main() -> None:
         summary["errors"],
     )
 
-    # 遡り再取得 (欠測日の自動補完)。失敗しても通常取込の成否には影響させない。
+    # 遡り再取得 (欠測日の自動補完)。失敗しても後続 (台帳更新) は続けるが、終了コードには反映する。
+    bf_failures: list = []
+    bf_crashed = False
     try:
-        n_bf = run_backfill(client, index)
-        logger.info("backfill: %d venue-days 試行", n_bf)
+        n_bf = run_backfill(client, index, bf_failures)
+        logger.info("backfill: %d venue-days 試行 (失敗 %d)", n_bf, len(bf_failures))
     except Exception as e:
+        bf_crashed = True
         logger.error("backfill crashed: %s", e)
 
     # 完了台帳の更新 (2026-07-11 艦隊監査 P1): results/payouts を取り込んだ
@@ -163,14 +184,28 @@ def main() -> None:
     # --days 30 のみで、取込済みレースが最長 1 週間 missing_results のまま残り
     # 週次 drift レポートが誤警告していた。台帳更新の失敗は収集の成否に
     # 影響させない (次回 cron / 週次 retrain でも再計算されるため)。
+    refresh_failed = False
     try:
         from build_race_completion import refresh
         days = max((date.today() - date.fromisoformat(target_date)).days + 1, LOOKBACK_DAYS + 2)
         n = len(refresh(days=days))
         logger.info("race_completion.csv refreshed (days=%d, %d races)", days, n)
     except Exception as e:
+        refresh_failed = True
         logger.error("race_completion refresh failed: %s", e)
+
+    # 並び (race_lines) の欠損を日次ログに 1 行残す (台帳 data_gaps には PC 停止日しか載らないため)。
+    try:
+        from build_race_completion import lines_gap_summary
+        s = lines_gap_summary(days=LOOKBACK_DAYS)
+        logger.info("並び欠損 (直近 %d 日, 当日除く): %d / %d R (%.1f%%)  場・日 %d / %d",
+                    LOOKBACK_DAYS, s["missing_races"], s["races"], s["rate"] * 100,
+                    s["missing_venue_days"], s["venue_days"])
+    except Exception as e:
+        logger.warning("lines gap summary failed: %s", e)
+
+    return exit_code(summary, len(bf_failures), bf_crashed, refresh_failed)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -87,6 +87,10 @@ ingest_day.py は **差分取り込み** に対応しているため、同じ ve
 - `snapshot_dt` (こちらの観測時刻) と `official_dt` (netkeirin 表示時刻) を分離記録
 - 試行ログは `prerace_snapshot_log.csv` (成功・失敗・no_odds を全部記録、dedup に使用)
 - 7:00 lines cron 失敗時は entries 未準備で最大 50 分 retry してから諦め
+- **並びの取り直し (2026-11-15)**: 7:00 時点でナイター/ミッドナイトの並びは未掲載 (掲載は 11 時台、7〜11 月の並び欠損の約 93% が
+  発走 20 時以降の場)。デーモンが起動時に並び未取得の場・日を洗い、専用スレッド (`src/lines_fill.py`) で
+  未発走の最初のレースの 120/60/30/10 分前に取り直す (未取得レースだけ追記・最後でも取れなければ data_gaps.csv)。
+  デーモンの変更は次回起動 (翌朝 8:00) から有効。回帰テスト: `tests/test_lines_fill.py`
 - 既存 `race_odds.csv` は post-start (st_time + 0〜5 分) の "最終オッズ近似"、
   リーケージのため**本番 EV 評価には使えない** (Codex 発見、Gemini 確認)。
   upper-bound 検証用に保持。詳細: `Opinion/CodexOpinion.md` 2026-05-12 エントリ参照

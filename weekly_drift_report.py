@@ -1316,12 +1316,32 @@ def _extra_data(gate: dict) -> dict:
     except Exception:
         out["gaps"] = []
     try:
+        from build_race_completion import lines_gap_summary
+        out["lines_gap"] = lines_gap_summary(days=14)
+    except Exception as e:
+        out["lines_gap"] = {"error": f"{type(e).__name__}: {e}"}
+    try:
         import ledger_check
         out["ledger"] = ledger_check.check_all(DATA_DIR)
     except Exception as e:
         out["ledger"] = {"error": f"{type(e).__name__}: {e}"}
     _EXTRA_MEMO[:] = [(gate, out)]
     return out
+
+
+def _lines_gap_line(g: dict | None) -> str:
+    """並び (race_lines) 欠損の 1 行 (2026-11-15)。5% 超で ⚠️。台帳 data_gaps は PC 停止日しか載らない。"""
+    if not g:
+        return "- 並びの欠損: 集計なし"
+    if "error" in g:
+        return f"- ⚠️ 並びの欠損の集計に失敗: {g['error']}"
+    mark = "✅" if g["rate"] <= 0.05 else "⚠️"
+    mid = g["by_band"].get("midnight", {"races": 0, "missing": 0})
+    return (f"- {mark} 並び (race_lines) の欠損 ({g['start']}〜{g['end']}): "
+            f"**{g['missing_races']} / {g['races']} R ({g['rate'] * 100:.1f}%)**、"
+            f"場・日 {g['missing_venue_days']} / {g['venue_days']} "
+            f"(うちミッドナイト {mid['missing']} / {mid['races']} R)。"
+            "並びは事後に取れないので、デーモンの当日取り直し (src/lines_fill.py) の効果をここで見る")
 
 
 def _extra_md(gate: dict) -> list[str]:
@@ -1337,6 +1357,7 @@ def _extra_md(gate: dict) -> list[str]:
         mark = "✅" if led["payouts_dup_keys"] == 0 and led["shadow_official_dup_keys"] == 0 else "⚠️"
         L.append(f"- {mark} キー重複: payouts.csv {led['payouts_dup_keys']} 組 / "
                  f"shadow official {led['shadow_official_dup_keys']} 組 (0 が正常)")
+    L.append(_lines_gap_line(ex.get("lines_gap")))
     if ex["gaps"]:
         L.append("- 事後に取れない欠測 (直近 60 日、data_gaps.csv):")
         for g in ex["gaps"]:
@@ -1359,6 +1380,7 @@ def _extra_html(gate: dict) -> list[str]:
         ok = led["payouts_dup_keys"] == 0 and led["shadow_official_dup_keys"] == 0
         p.append(f'<p>{"✅" if ok else "⚠️"} キー重複: payouts.csv <b>{led["payouts_dup_keys"]}</b> 組 / '
                  f'shadow official <b>{led["shadow_official_dup_keys"]}</b> 組 (0 が正常)</p>')
+    p.append("<p>" + _lines_gap_line(ex.get("lines_gap")).lstrip("- ").replace("**", "") + "</p>")
     if ex["gaps"]:
         p.append('<p style="margin:4px 0;">事後に取れない欠測 (直近 60 日):</p><ul style="margin:0;">'
                  + "".join(f'<li>{g["race_date"]} {g["kind"]} {g["place_code"]}: {g["note"]}</li>'
