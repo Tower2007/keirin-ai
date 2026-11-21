@@ -89,7 +89,7 @@ class KeirinClient:
         s.headers.update({
             "User-Agent": self._ua,
             "Accept-Language": "ja,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Encoding": "gzip, deflate",  # br は解凍ライブラリ (brotli) を入れていないので要求しない (2026-11-21)
         })
         return s
 

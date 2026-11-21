@@ -4,9 +4,9 @@ auto-racing-ai / boat-racing-ai 版から keirin に移植 (2026-05-23)。
 keirin の .env 命名 (GMAIL_ADDRESS / NOTIFY_TO) に合わせている。
 
 .env 設定:
-  GMAIL_ADDRESS=no28akira2007@gmail.com
+  GMAIL_ADDRESS=your-address@gmail.com
   GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
-  NOTIFY_TO=no28akira2007@gmail.com,other@example.com   # カンマ区切り
+  NOTIFY_TO=your-address@gmail.com,other@example.com   # カンマ区切り
 
 使い方:
   from gmail_notify import send_email

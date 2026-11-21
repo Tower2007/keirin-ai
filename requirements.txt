@@ -1,3 +1,7 @@
 requests>=2.31
 python-dotenv>=1.0
 pandas>=2.0
+# 2026-11-21: コードが import しているのに記載が無かったもの (新しい環境で入れ直すと動かなかった)
+numpy>=1.26
+lightgbm>=4.0
+scikit-learn>=1.4

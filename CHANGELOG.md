@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 2026-11-21 (横断調査の指摘: requirements の不足 / br 圧縮の要求 / メールアドレスの記載)
+
+予想・判定・しきい値は不変。
+- `requirements.txt`: コードが import している numpy / lightgbm / scikit-learn が無かった (新しい環境で入れ直すと動かない) → 追記。
+- `src/client.py` / `src/netkeirin_client.py`: `Accept-Encoding` から `br` を外した。br を解くライブラリ (brotli) は入れておらず、
+  相手が br で返した場合に本文が読めなくなる。現在は両サイトとも無圧縮で返しており、変更後のヘッダーで 200 を確認。
+- `gmail_notify.py`: 公開リポジトリのため、説明文の実メールアドレスを例示用に置き換え (過去の履歴には残る)。
+
 ## 2026-11-15 (完了台帳: 正当な欠損 = 全返還・日全体中止を欠測から除外)
 
 - 原因: 全返還 (不成立) のレースは着順表・払戻がサイトに元々無く、日全体の中止は朝の取り込みで race_meta に is_canceled=False が
